@@ -335,7 +335,7 @@ test('厂牌徽标：Claude 陶土底 / Codex 黑底，主图标用官方 path�
   p.close();
 });
 
-test('空态：三要素 + 未接入显蓝色主按钮，Codex 是灰字非按钮', () => {
+test('空态：三要素 + 未接入显蓝色主按钮，Codex 是真次入口（US-006 落地）', () => {
   const p = mountPanel();
   p.push('agent-status:snapshot', { rows: [], summary: { running: 0, waiting: 0, total: 0, unknown: 0 } });
 
@@ -352,13 +352,54 @@ test('空态：三要素 + 未接入显蓝色主按钮，Codex 是灰字非按�
   assert.strictEqual(p.$('#installed').hidden, true);
   assert.strictEqual(p.$('#uninstall-claude').hidden, true);
 
-  // Codex 只能是灰字说明：不是 button，点了也不发任何意图（禁假入口）
-  const codex = p.$('#codex-soon');
-  assert.strictEqual(codex.textContent, t('empty.codexComingSoon'));
-  assert.strictEqual(codex.tagName, 'DIV', 'Codex 提示不得是按钮');
-  const before = p.emitted.length;
-  codex.dispatchEvent(new p.dom.window.MouseEvent('click', { bubbles: true }));
-  assert.strictEqual(p.emitted.length, before, 'Codex 灰字挂了假入口');
+  // US-006 之前这里是「即将支持」灰字（禁假入口）；US-006 落地后它必须是真按钮 ——
+  // 点了确实会写 ~/.codex/hooks.json。留着灰字才是这时候的假入口（功能有了却没入口）。
+  const codex = p.$('#install-codex');
+  assert.strictEqual(codex.hidden, false, '未接入 Codex 时应显示 Codex 接入次入口');
+  assert.strictEqual(codex.textContent, t('empty.installCodex'));
+  assert.strictEqual(codex.tagName, 'BUTTON', 'US-006 落地后 Codex 入口必须是真按钮');
+  assert.strictEqual(p.$('#codex-installed').hidden, true);
+  assert.strictEqual(p.$('#uninstall-codex').hidden, true);
+  // 未接入时不提信任：那是接入之后才需要做的事
+  assert.strictEqual(p.$('#codex-trust').hidden, true);
+  p.close();
+});
+
+test('空态：Codex 已接入 → 已接入 ✓ + 移除 + 信任提示；与 Claude 各自独立翻面', () => {
+  const p = mountPanel();
+  p.push('agent-status:snapshot', { rows: [], summary: { running: 0 } });
+  // 只装了 Codex，没装 Claude —— 两档必须各显各的，不能被对方的状态带着走
+  p.push('agent-status:install-state', { claude: false, codex: true });
+
+  assert.strictEqual(p.$('#install-codex').hidden, true, '已接入不该再显示 Codex 接入按钮');
+  assert.strictEqual(p.$('#codex-installed').hidden, false);
+  assert.strictEqual(p.$('#codex-installed').textContent, t('empty.codexInstalled'));
+  assert.strictEqual(p.$('#uninstall-codex').hidden, false);
+  assert.strictEqual(p.$('#uninstall-codex').textContent, t('empty.uninstallCodex'));
+  // facts §hook trust：installer 不代写 hooks.state，所以必须显式告诉用户去点 Trust，
+  // 否则钩子装好了 Codex 也不会跑，用户只会觉得插件坏了
+  assert.strictEqual(p.$('#codex-trust').hidden, false, '接入 Codex 后必须提示信任步骤');
+  assert.strictEqual(p.$('#codex-trust').textContent, t('empty.codexTrust'));
+  // Claude 那档不受影响
+  assert.strictEqual(p.$('#install-claude').hidden, false, 'Codex 已接入不该把 Claude 也标成已接入');
+  assert.strictEqual(p.$('#installed').hidden, true);
+  p.close();
+});
+
+test('点 Codex 接入 → 发 agent-status:install-codex 意图（panel 不自己改配置）', () => {
+  const p = mountPanel();
+  p.push('agent-status:snapshot', { rows: [], summary: { running: 0 } });
+  p.$('#install-codex').dispatchEvent(new p.dom.window.MouseEvent('click', { bubbles: true }));
+  assert.deepStrictEqual(p.emitted.map((e) => e.name), ['agent-status:install-codex']);
+  p.close();
+});
+
+test('点移除 Codex 钩子 → 发 agent-status:uninstall-codex 意图', () => {
+  const p = mountPanel();
+  p.push('agent-status:snapshot', { rows: [], summary: { running: 0 } });
+  p.push('agent-status:install-state', { claude: false, codex: true });
+  p.$('#uninstall-codex').dispatchEvent(new p.dom.window.MouseEvent('click', { bubbles: true }));
+  assert.deepStrictEqual(p.emitted.map((e) => e.name), ['agent-status:uninstall-codex']);
   p.close();
 });
 

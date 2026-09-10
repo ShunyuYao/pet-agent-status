@@ -21,6 +21,9 @@
   "empty.installClaude": "一键接入 Claude Code 钩子",
   "empty.installCodex": "一键接入 Codex CLI 钩子",
   "empty.codexComingSoon": "Codex CLI 即将支持",
+  "empty.codexInstalled": "Codex CLI 已接入 ✓",
+  "empty.uninstallCodex": "移除 Codex 钩子",
+  "empty.codexTrust": "下次启动 Codex 时请选择「Trust all and continue」以启用钩子",
   "empty.installed": "已接入 ✓",
   "empty.uninstall": "移除钩子",
 

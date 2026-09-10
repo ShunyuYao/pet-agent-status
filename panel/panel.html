@@ -126,8 +126,15 @@ body{
   margin-top:8px;background:none;border:0;cursor:pointer;
   color:var(--gray);font-size:11px;font-family:inherit;text-decoration:underline;
 }
-/* Codex 未落地：灰字说明，**不是**按钮、不挂 click（DESIGN.md 禁假入口） */
-.codex-soon{margin-top:14px;font-size:11px;color:var(--gray)}
+/* Codex 次入口（US-006 落地后是真按钮；落地前是灰字「即将支持」，见 DESIGN.md 空态） */
+.codex-btn{
+  margin-top:10px;background:none;border:0;cursor:pointer;
+  color:var(--gray);font-size:11.5px;font-family:inherit;text-decoration:underline;
+}
+.codex-installed{margin-top:10px;font-size:11.5px;color:var(--success)}
+/* facts §hook trust：hooks.json 变更后 Codex 首启会要求 Trust；installer 绝不代写
+   hooks.state，所以必须把这一步明确告诉用户，否则钩子装了却"没反应" */
+.codex-trust{margin-top:6px;font-size:10.5px;color:var(--warning);line-height:1.6}
 .footer{margin-top:12px;font-size:10.5px;color:var(--gray);text-align:center}
 [hidden]{display:none !important}
 </style>
@@ -148,7 +155,10 @@ body{
     <button class="install-btn" id="install-claude" type="button"></button>
     <div class="installed" id="installed" hidden></div>
     <button class="uninstall-btn" id="uninstall-claude" type="button" hidden></button>
-    <div class="codex-soon" id="codex-soon"></div>
+    <button class="codex-btn" id="install-codex" type="button"></button>
+    <div class="codex-installed" id="codex-installed" hidden></div>
+    <button class="codex-btn" id="uninstall-codex" type="button" hidden></button>
+    <div class="codex-trust" id="codex-trust" hidden></div>
   </div>
 
   <div class="footer" id="footer"></div>
@@ -161,6 +171,8 @@ body{
   var EV_INSTALL_STATE = 'agent-status:install-state';
   var EV_INSTALL_CLAUDE = 'agent-status:install-claude';
   var EV_UNINSTALL_CLAUDE = 'agent-status:uninstall-claude';
+  var EV_INSTALL_CODEX = 'agent-status:install-codex';
+  var EV_UNINSTALL_CODEX = 'agent-status:uninstall-codex';
   var EV_JUMP = 'agent-status:jump';
 
   // ---- 厂牌 SVG：assets/claude.svg / assets/openai.svg 的内联副本 ----
@@ -185,6 +197,10 @@ body{
       'empty.desc2': '任务完成或等待批准时，宠物会提醒你。',
       'empty.installClaude': '一键接入 Claude Code 钩子',
       'empty.codexComingSoon': 'Codex CLI 即将支持',
+      'empty.installCodex': '一键接入 Codex CLI 钩子',
+      'empty.codexInstalled': 'Codex CLI 已接入 ✓',
+      'empty.uninstallCodex': '移除 Codex 钩子',
+      'empty.codexTrust': '下次启动 Codex 时请选择「Trust all and continue」以启用钩子',
       'empty.installed': '已接入 ✓',
       'empty.uninstall': '移除钩子'
     },
@@ -197,6 +213,10 @@ body{
       'empty.desc2': 'Your pet will ping you when a task finishes or needs approval.',
       'empty.installClaude': 'Install Claude Code hooks',
       'empty.codexComingSoon': 'Codex CLI coming soon',
+      'empty.installCodex': 'Install Codex CLI hooks',
+      'empty.codexInstalled': 'Codex CLI installed ✓',
+      'empty.uninstallCodex': 'Remove Codex hooks',
+      'empty.codexTrust': 'Next time you start Codex, choose "Trust all and continue" to enable the hooks',
       'empty.installed': 'Installed ✓',
       'empty.uninstall': 'Remove hooks'
     }
@@ -227,6 +247,10 @@ body{
   var elInstall = $('install-claude');
   var elInstalled = $('installed');
   var elUninstall = $('uninstall-claude');
+  var elInstallCodex = $('install-codex');
+  var elCodexInstalled = $('codex-installed');
+  var elUninstallCodex = $('uninstall-codex');
+  var elCodexTrust = $('codex-trust');
 
   // ---- 与 tool 侧通信：只经 pet.events（AGENTS.md 插件形态红线） ----
   var pet = window.pet || {};
@@ -251,8 +275,11 @@ body{
     elInstall.textContent = t('empty.installClaude');
     elInstalled.textContent = t('empty.installed');
     elUninstall.textContent = t('empty.uninstall');
-    // 灰字，无 click handler —— US-006 落地前不给假入口
-    $('codex-soon').textContent = t('empty.codexComingSoon');
+    // US-006 已落地：这是真按钮，点了确实会写 ~/.codex/hooks.json（不再是「即将支持」灰字）
+    elInstallCodex.textContent = t('empty.installCodex');
+    elCodexInstalled.textContent = t('empty.codexInstalled');
+    elUninstallCodex.textContent = t('empty.uninstallCodex');
+    elCodexTrust.textContent = t('empty.codexTrust');
   }
   paintStatic();
 
@@ -264,9 +291,12 @@ body{
   // 按钮只发意图，改配置的活在 tool 侧（panel 上下文不该碰 fs）
   elInstall.addEventListener('click', function () { emit(EV_INSTALL_CLAUDE, {}); });
   elUninstall.addEventListener('click', function () { emit(EV_UNINSTALL_CLAUDE, {}); });
+  elInstallCodex.addEventListener('click', function () { emit(EV_INSTALL_CODEX, {}); });
+  elUninstallCodex.addEventListener('click', function () { emit(EV_UNINSTALL_CODEX, {}); });
 
   // ---- 渲染 ----
   var installed = false;
+  var codexInstalled = false;
 
   function badgeOf(row) {
     var isCodex = row.agent === 'codex';
@@ -365,16 +395,25 @@ body{
     if (isEmpty) renderInstallState();
   }
 
-  // 空态的接入按钮态机：未接入 → 蓝主按钮；已接入 → 「已接入 ✓」+ 移除钩子
+  // 空态的接入按钮态机：未接入 → 蓝主按钮；已接入 → 「已接入 ✓」+ 移除钩子。
+  // 两个厂牌各自独立翻面：装了 Claude 没装 Codex 时，Codex 那档仍显接入按钮。
   function renderInstallState() {
     elInstall.hidden = installed;
     elInstalled.hidden = !installed;
     elUninstall.hidden = !installed;
+
+    elInstallCodex.hidden = codexInstalled;
+    elCodexInstalled.hidden = !codexInstalled;
+    elUninstallCodex.hidden = !codexInstalled;
+    // 信任提示只在已接入 Codex 时显示：没装的时候提这个没有意义，
+    // 装了却不提用户会以为钩子坏了（facts §hook trust，插件不代写 hooks.state）。
+    elCodexTrust.hidden = !codexInstalled;
   }
 
   on(EV_SNAPSHOT, function (snapshot) { render(snapshot); });
   on(EV_INSTALL_STATE, function (data) {
     installed = !!(data && data.claude);
+    codexInstalled = !!(data && data.codex);
     if (!elEmpty.hidden) renderInstallState();
   });
 

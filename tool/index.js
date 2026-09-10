@@ -12,6 +12,7 @@ const { aggregate } = require(path.join(LIB, 'aggregate.js'));
 const { createPetLink } = require(path.join(LIB, 'pet-link.js'));
 const { createNodeI18n } = require(path.join(LIB, 'i18n.js'));
 const installer = require(path.join(LIB, 'claude-hooks-installer.js'));
+const codexInstaller = require(path.join(LIB, 'codex-hooks-installer.js'));
 const terminalJump = require(path.join(LIB, 'terminal-jump.js'));
 
 const TICK_MS = 2000;                            // 宿主把最小间隔钳到 1000ms，2s 满足「3 秒内可感知」
@@ -22,6 +23,8 @@ const SNAPSHOT_EVENT = 'agent-status:snapshot';
 const INSTALL_STATE_EVENT = 'agent-status:install-state';   // tool → panel：接入与否
 const INSTALL_CLAUDE_EVENT = 'agent-status:install-claude';   // panel → tool：接入意图
 const UNINSTALL_CLAUDE_EVENT = 'agent-status:uninstall-claude'; // panel → tool：移除意图
+const INSTALL_CODEX_EVENT = 'agent-status:install-codex';       // panel → tool：Codex 接入意图
+const UNINSTALL_CODEX_EVENT = 'agent-status:uninstall-codex';   // panel → tool：Codex 移除意图
 const JUMP_EVENT = 'agent-status:jump';                         // panel → tool：跳回终端意图
 
 // 跳转失败的错误条挂多久。留到下一次跳转成功/超时为止，不能永远挂着 ——
@@ -55,6 +58,9 @@ function createCollector(deps) {
   // 缺省 undefined → installer 自己走 settingsPath()（即 PET_AS_CLAUDE_SETTINGS 覆盖）；
   // 测试注入临时文件，绝不碰真实 ~/.claude/settings.json
   const installOpts = d.settingsFile ? { settingsFile: d.settingsFile } : undefined;
+  // 同理，Codex 侧缺省走 hooksPath()（即 PET_AS_CODEX_HOOKS / CODEX_HOME 覆盖），
+  // 测试注入临时文件，绝不碰真实 ~/.codex/hooks.json
+  const codexOpts = d.codexHooksFile ? { hooksFile: d.codexHooksFile } : undefined;
 
   let taskId = null;
   let lastSnapshot = { rows: [], summary: { running: 0, waiting: 0, total: 0, unknown: 0 } };
@@ -153,8 +159,11 @@ function createCollector(deps) {
   function pushInstallState(pet) {
     let claude = false;
     try { claude = installer.isInstalled(installOpts); } catch (_) { claude = false; }
-    emit(pet, INSTALL_STATE_EVENT, { claude });
-    return claude;
+    let codex = false;
+    try { codex = codexInstaller.isInstalled(codexOpts); } catch (_) { codex = false; }
+    // 两个厂牌各一个开关，panel 各画各的（载荷仍是同一个事件，加字段不改契约）
+    emit(pet, INSTALL_STATE_EVENT, { claude, codex });
+    return { claude, codex };
   }
 
   function handleInstall(pet) {
@@ -168,11 +177,25 @@ function createCollector(deps) {
     return pushInstallState(pet);
   }
 
+  // Codex 侧同构。**绝不碰 hooks.state**（facts §hook trust：那是 Codex 的信任机制，
+  // 插件替用户点头等于绕过安全设计）—— 接入后由面板提示用户下次启动 Codex 时确认信任。
+  function handleInstallCodex(pet) {
+    try { codexInstaller.install(codexOpts); } catch (_) { /* 权限/磁盘问题 */ }
+    return pushInstallState(pet);
+  }
+
+  function handleUninstallCodex(pet) {
+    try { codexInstaller.uninstall(codexOpts); } catch (_) { /* 同上 */ }
+    return pushInstallState(pet);
+  }
+
   async function start(pet) {
     if (taskId != null) return taskId;   // 启停串行，不重复注册（重复注册 = 泄漏定时器）
     // 先接意图再起定时器：面板可能在 tick 之前就点了接入
     subscribe(pet, INSTALL_CLAUDE_EVENT, () => handleInstall(pet));
     subscribe(pet, UNINSTALL_CLAUDE_EVENT, () => handleUninstall(pet));
+    subscribe(pet, INSTALL_CODEX_EVENT, () => handleInstallCodex(pet));
+    subscribe(pet, UNINSTALL_CODEX_EVENT, () => handleUninstallCodex(pet));
     subscribe(pet, JUMP_EVENT, (data) => handleJump(pet, data));
     // 必须 await：pet.scheduler.every 返回的是 Promise<taskId>，
     // 直接存 Promise 会让 cancel 拿到个对象、恒 miss，旧定时器永不回收（宿主已知坑）。
@@ -190,7 +213,8 @@ function createCollector(deps) {
 
   return {
     start, stop, tick,
-    handleInstall, handleUninstall, pushInstallState, handleJump,
+    handleInstall, handleUninstall, handleInstallCodex, handleUninstallCodex,
+    pushInstallState, handleJump,
     get taskId() { return taskId; },
     get lastSnapshot() { return lastSnapshot; }
   };
@@ -235,5 +259,6 @@ module.exports = {
   activate, deactivate, createCollector,
   isPidAlive, TICK_MS,
   SNAPSHOT_EVENT, INSTALL_STATE_EVENT, INSTALL_CLAUDE_EVENT, UNINSTALL_CLAUDE_EVENT,
+  INSTALL_CODEX_EVENT, UNINSTALL_CODEX_EVENT,
   JUMP_EVENT, JUMP_ERROR_TTL_MS
 };

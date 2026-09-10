@@ -21,6 +21,9 @@
   "empty.installClaude": "Install Claude Code hooks",
   "empty.installCodex": "Install Codex CLI hooks",
   "empty.codexComingSoon": "Codex CLI coming soon",
+  "empty.codexInstalled": "Codex CLI installed ✓",
+  "empty.uninstallCodex": "Remove Codex hooks",
+  "empty.codexTrust": "Next time you start Codex, choose \"Trust all and continue\" to enable the hooks",
   "empty.installed": "Installed ✓",
   "empty.uninstall": "Remove hooks",
 

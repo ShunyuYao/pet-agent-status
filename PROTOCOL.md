@@ -39,7 +39,26 @@
 | `Stop` | `done` |
 | `SessionEnd` | `ended` |
 
-Codex CLI 事件映射在 US-006 按本机实测事实（`fixtures/codex-hooks-facts.md`，由监工提供）补充进本表。
+Codex CLI 事件映射（US-006 按本机实测事实补全，来源 `fixtures/codex-hooks-facts.md`：
+codex-cli 0.153.4 实测。证据分级：【实录】= 真实会话抓到 payload；【二进制确认】= CLI 二进制
+wire 结构里确认事件存在但未实录，按同名 Claude Code 行映射）：
+
+| Codex CLI hook 事件 | 写入 state | 证据 |
+|---|---|---|
+| `SessionStart` | `running` | 实录 |
+| `UserPromptSubmit` | `running` | 实录 |
+| `PreToolUse` / `PostToolUse` | `running` | 二进制确认 |
+| `PermissionRequest`（权限等待，对应 Claude Code 的 `Notification`） | `waiting` | 二进制确认 |
+| `Stop` | `done` | 实录 |
+| `SessionEnd` | `ended` | 实录 |
+
+Codex 侧附加约定：
+
+- `agent` 恒 `'codex'`；`tty`/`pid` 采集方式同 Claude Code hook（hook 进程自查，`pid` 写 `ppid`）。
+- `threadId` = Codex 的 `session_id` 本身（UUID v7 形态，即 `codex://threads/<id>` 可用的线程号）。
+  **仅在 `session_id` 通过 UUID 形态校验时写入**；不合形态则不写（协议里 `threadId` 是选填，不造假值）。
+- Codex 未在上表的事件（`PreCompact`/`PostCompact`/`SubagentStart`/`SubagentStop`/`Interrupt` 等
+  二进制里存在但语义待实录）一律按未知事件忽略退出 0，不猜测映射。
 
 ## 采集器推导态（不落盘）
 
@@ -53,4 +72,4 @@ Codex CLI 事件映射在 US-006 按本机实测事实（`fixtures/codex-hooks-f
 |---|---|---|
 | `PET_AGENT_STATUS_DIR` | 状态目录 | `~/.local/state/pet-agent-status` |
 | `PET_AS_CLAUDE_SETTINGS` | Claude Code 配置 | `~/.claude/settings.json` |
-| `PET_AS_CODEX_HOOKS` | Codex CLI hooks 配置 | US-006 按实测事实定 |
+| `PET_AS_CODEX_HOOKS` | Codex CLI hooks 配置 | `$CODEX_HOME/hooks.json`，`CODEX_HOME` 缺省 `~/.codex` |
