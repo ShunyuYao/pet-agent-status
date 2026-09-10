@@ -110,6 +110,31 @@ function collectorOn(dir, over) {
 
 (async function main() {
   // ---- 1. scheduler 契约（criteria §2 第一条 + 宿主已知坑）----
+// 隔离自证的判据是「本轮没有新增/改动这些真实路径」，不是「它们不存在」——
+// 插件被真实使用后状态目录与备份文件必然存在（2026-09-10 在用户机器上误报过）。
+function guardSnapshot(paths) {
+  return paths.map((p) => {
+    if (!fs.existsSync(p)) return `${p}@absent`;
+    let st;
+    try { st = fs.statSync(p); } catch (_) { return `${p}@gone`; }
+    if (st.isDirectory()) {
+      const names = fs.readdirSync(p).sort().map((n) => {
+        let m = 0;
+        try { m = fs.statSync(path.join(p, n)).mtimeMs; } catch (_) { /* 竞态 */ }
+        return `${n}:${m}`;
+      });
+      return `${p}@dir[${names.join(',')}]`;
+    }
+    return `${p}@file:${st.mtimeMs}`;
+  });
+}
+const GUARD_PATHS = [
+  path.join(os.homedir(), '.local', 'state', 'pet-agent-status'),
+  path.join(os.homedir(), '.claude', 'settings.json.bak-pet-agent-status'),
+  path.join(os.homedir(), '.codex', 'hooks.json.bak-pet-agent-status')
+];
+const GUARD_BEFORE = guardSnapshot(GUARD_PATHS);
+
 
   await test('start 用 await 取 taskId 并存下（不是存 Promise）', async () => {
     const m = mockPet();
@@ -443,7 +468,7 @@ function collectorOn(dir, over) {
 
   await test('测试全程未触碰真实状态目录', () => {
     const real = path.join(os.homedir(), '.local', 'state', 'pet-agent-status');
-    assert.strictEqual(fs.existsSync(real), false, `真实状态目录不该存在：${real}`);
+    assert.deepStrictEqual(guardSnapshot(GUARD_PATHS), GUARD_BEFORE, '真实路径本轮被动过');
   });
 
   for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });

@@ -87,6 +87,31 @@ const EXPECTED_STATE_FILE =
 const opts = (file) => ({ settingsFile: file, command: FAKE_CMD });
 
 // ---- 1. 安装：挂全事件、保留用户条目、写备份 ----
+// 隔离自证的判据是「本轮没有新增/改动这些真实路径」，不是「它们不存在」——
+// 插件被真实使用后状态目录与备份文件必然存在（2026-09-10 在用户机器上误报过）。
+function guardSnapshot(paths) {
+  return paths.map((p) => {
+    if (!fs.existsSync(p)) return `${p}@absent`;
+    let st;
+    try { st = fs.statSync(p); } catch (_) { return `${p}@gone`; }
+    if (st.isDirectory()) {
+      const names = fs.readdirSync(p).sort().map((n) => {
+        let m = 0;
+        try { m = fs.statSync(path.join(p, n)).mtimeMs; } catch (_) { /* 竞态 */ }
+        return `${n}:${m}`;
+      });
+      return `${p}@dir[${names.join(',')}]`;
+    }
+    return `${p}@file:${st.mtimeMs}`;
+  });
+}
+const GUARD_PATHS = [
+  path.join(os.homedir(), '.local', 'state', 'pet-agent-status'),
+  path.join(os.homedir(), '.claude', 'settings.json.bak-pet-agent-status'),
+  path.join(os.homedir(), '.codex', 'hooks.json.bak-pet-agent-status')
+];
+const GUARD_BEFORE = guardSnapshot(GUARD_PATHS);
+
 test('install 为映射表里每个事件挂上本插件条目', () => {
   const file = seed(USER_SETTINGS);
   installer.install(opts(file));
@@ -471,7 +496,7 @@ test('hookCommand 生成的两段路径都被引号包裹', () => {
 // ---- 7. 隔离自证 ----
 test('测试期间未修改真实 ~/.claude/settings.json', () => {
   const real = path.join(os.homedir(), '.claude', 'settings.json');
-  assert.ok(!fs.existsSync(real + '.bak-pet-agent-status'), '真实配置被动过（出现了备份文件）');
+  assert.deepStrictEqual(guardSnapshot(GUARD_PATHS), GUARD_BEFORE, '真实路径本轮被动过');
 });
 
 for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });

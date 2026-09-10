@@ -21,7 +21,7 @@ function quit() {
 function handle(raw) {
   const { stateForEvent, threadIdOf } = require(path.join(LIB, 'codex-events.js'));
   const { writeStatus } = require(path.join(LIB, 'state-files.js'));
-  const { detectTty } = require(path.join(LIB, 'tty-detect.js'));
+  const { resolveTty } = require(path.join(LIB, 'tty-detect.js'));
 
   const event = JSON.parse(raw);
   const state = stateForEvent(event.hook_event_name);
@@ -34,7 +34,7 @@ function handle(raw) {
     agent: 'codex',
     sessionId: event.session_id,
     cwd: event.cwd,
-    tty: detectTty(),
+    tty: resolveTty(process.ppid),
     // 挂钩的是 Codex CLI 进程，本脚本自己的 pid 一写完就没了，做存活探测无意义
     pid: process.ppid,
     state,

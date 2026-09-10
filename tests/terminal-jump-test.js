@@ -74,6 +74,21 @@ function chain(appBin, ttyName, basePid) {
 
 // ================= 1. detectTerminal —— 归属判定 =================
 
+// 隔离自证的正确判据是「本轮没有新增/改动真实目录里的文件」，不是「目录不存在」——
+// 插件一旦被真实使用，该目录必然存在（2026-09-10 在用户机器上误报过）。
+// 快照在测试开始前拍，收尾时比对文件名与 mtime。
+function realStateDirSnapshot() {
+  const real = path.join(os.homedir(), '.local', 'state', 'pet-agent-status');
+  if (!fs.existsSync(real)) return { real, exists: false, entries: [] };
+  const entries = fs.readdirSync(real).sort().map((n) => {
+    let mtime = 0;
+    try { mtime = fs.statSync(path.join(real, n)).mtimeMs; } catch (_) { /* 竞态删除 */ }
+    return `${n}@${mtime}`;
+  });
+  return { real, exists: true, entries };
+}
+const REAL_STATE_BEFORE = realStateDirSnapshot();
+
 test('iTerm2 会话：沿父链认出 iterm2', () => {
   assert.strictEqual(tj.detectTerminal('/dev/ttys004', chain(ITERM_BIN, 'ttys004')), 'iterm2');
 });
@@ -644,7 +659,8 @@ test('lib/terminal-jump.js 代码里没有中文字面量（中文只许在 loca
 });
 
 test('测试全程未触碰真实状态目录', () => {
-  assert.strictEqual(fs.existsSync(path.join(os.homedir(), '.local', 'state', 'pet-agent-status')), false);
+  const after = realStateDirSnapshot();
+  assert.deepStrictEqual(after.entries, REAL_STATE_BEFORE.entries, '真实状态目录被污染');
 });
 
 // ---- 收尾 ----
@@ -655,4 +671,25 @@ runAll().then(() => {
     process.exit(1);
   }
   console.log(`\nterminal-jump-test: ${passed} passed`);
+});
+
+// ---- 真机缺陷回归（2026-09-10，v0.2.2）----
+
+test('iTerm2 3.5+ 的 iTermServer 祖先链能判出 iterm2（真机链形无 .app 片段）', () => {
+  // 真机实测链：claude → -zsh → login → iTermServer-3.6.11（整条链没有 `.app/`）
+  const psTree = () => [
+    { pid: 829, ppid: 9805, comm: '/opt/homebrew/bin/node', tty: 'ttys026' },
+    { pid: 9805, ppid: 9790, comm: '-zsh', tty: 'ttys026' },
+    { pid: 9790, ppid: 9758, comm: '/usr/bin/login', tty: 'ttys026' },
+    { pid: 9758, ppid: 1, comm: '/Users/u/Library/Application Support/iTerm2/iTermServer-3.6.11', tty: '??' }
+  ];
+  assert.strictEqual(tj.detectTerminal('/dev/ttys026', psTree), 'iterm2');
+});
+
+test('iTermServer 之外的同名垃圾不误判', () => {
+  const psTree = () => [
+    { pid: 1, ppid: 0, comm: '/tmp/fake/iTermServer-evil', tty: 'ttys001' }
+  ];
+  // 必须带 iTerm2 目录锚，裸 iTermServer 名不算
+  assert.strictEqual(tj.detectTerminal('/dev/ttys001', psTree), null);
 });

@@ -78,6 +78,21 @@ for (const [fixture, event, state] of MAPPING) {
 }
 
 // ---- 2. 落盘记录符合 schema:1 ----
+// 隔离自证的正确判据是「本轮没有新增/改动真实目录里的文件」，不是「目录不存在」——
+// 插件一旦被真实使用，该目录必然存在（2026-09-10 在用户机器上误报过）。
+// 快照在测试开始前拍，收尾时比对文件名与 mtime。
+function realStateDirSnapshot() {
+  const real = path.join(os.homedir(), '.local', 'state', 'pet-agent-status');
+  if (!fs.existsSync(real)) return { real, exists: false, entries: [] };
+  const entries = fs.readdirSync(real).sort().map((n) => {
+    let mtime = 0;
+    try { mtime = fs.statSync(path.join(real, n)).mtimeMs; } catch (_) { /* 竞态删除 */ }
+    return `${n}@${mtime}`;
+  });
+  return { real, exists: true, entries };
+}
+const REAL_STATE_BEFORE = realStateDirSnapshot();
+
 test('落盘记录字段齐全且符合 PROTOCOL.md schema:1', () => {
   const dir = tmp();
   const before = Date.now();
@@ -196,9 +211,27 @@ test('恶意 session_id 被清洗，不穿越出状态目录', () => {
 
 // ---- 6. 隔离自证：全程没碰真实状态目录 ----
 test('测试期间未写入真实 ~/.local/state/pet-agent-status', () => {
-  const real = path.join(os.homedir(), '.local', 'state', 'pet-agent-status');
-  assert.ok(!fs.existsSync(real), `真实状态目录被污染: ${real}`);
+  const after = realStateDirSnapshot();
+  assert.deepStrictEqual(after.entries, REAL_STATE_BEFORE.entries,
+    `真实状态目录被污染: ${after.real}`);
 });
 
 for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
 console.log(`\nclaude-hook-test: ${passed} passed`);
+
+// ---- 真机缺陷回归（2026-09-10，v0.2.2）：fd 全是 pipe 时靠 ps 兜底拿 tty ----
+
+test('detectTtyByPid：ps 给出 ttysNNN 时拼成 /dev 路径；?? 与垃圾一律 null', () => {
+  const td = require(path.join(ROOT, 'lib', 'tty-detect.js'));
+  assert.strictEqual(td.detectTtyByPid(4242, () => 'ttys026\n'), '/dev/ttys026');
+  assert.strictEqual(td.detectTtyByPid(4242, () => '??'), null, '无控制终端应为 null');
+  assert.strictEqual(td.detectTtyByPid(4242, () => '../../etc/passwd'), null, '垃圾不得拼进路径');
+  assert.strictEqual(td.detectTtyByPid(4242, () => { throw new Error('ps gone'); }), null, 'ps 失败不抛');
+  assert.strictEqual(td.detectTtyByPid(0, () => 'ttys001'), null, '非法 pid 不查');
+});
+
+test('resolveTty：fd 路不通（Claude Code 给 hook 的 stdin/stdout 都是 pipe）时走 ps 兜底', () => {
+  const td = require(path.join(ROOT, 'lib', 'tty-detect.js'));
+  // fds 传空数组模拟「一个 fd 都不是 tty」——这正是真机形态，旧实现在此恒返回 null
+  assert.strictEqual(td.resolveTty(4242, { fds: [], execFileSync: () => 'ttys017' }), '/dev/ttys017');
+});
