@@ -589,3 +589,104 @@ claude-hook 21 + claude-installer 23 + state-files 20 = **64 全绿**，退出�
   MARKER 是本插件专有标识，实际不会与用户字段撞名，暂不处理。
 
 <story_completed>US-002</story_completed>
+
+================================================================================
+## US-002 第 4 轮验证（返工后复验）— PASS
+
+判据文件：根 `criteria/US-002.md`（监工 2026-09-10 裁决后落盘版）。
+注意：`scripts/ralph/criteria/US-002.md` 是过时副本（仍写着旧「逐字节」标准与
+`ps` 父链要求），两份不一致时以根目录那份为准 —— 上一轮 commit 更新的也是它。
+
+### 门禁
+
+- `node --check`：git 跟踪的全部 JS 逐个通过，无一失败。
+- 仓内测试退出码实测：claude-hook rc=0（21 passed）、claude-installer rc=0（23 passed）、
+  state-files rc=0（20 passed），合计 64 全绿。
+
+### 独立复验（verify agent 自写 /tmp 脚本，40 断言全绿，跑完已删）
+
+不复用仓内夹具与测试代码；hook 一律 spawn 喂 stdin，安装器一律读回落盘文件断言。
+
+- §1 七事件映射用**自造 payload**（非 `fixtures/`）逐一复跑：state/lastEvent/schema/
+  agent/sessionId/cwd/project/source/ts 全对；tty 为 null 或 `/dev/ttysNNN`；
+  落盘键集合限于协议字段（无多余键）。payload 里塞的 `SECRET-PROMPT` /
+  `SECRET-TOOL-INPUT` 均不出现在落盘 JSON —— 不采集会话正文。
+- §1 pid 语义：经中间 node 进程 spawn hook，断言落盘 `pid === 中间进程 pid`，
+  确认写的是父进程（Claude Code 本体）而非 hook 自身。
+- §1 静默失败：11 种坏输入（非 JSON / 空 / 空白 / 数组 / null / 字符串 / 未知事件 /
+  缺 hook_event_name / 缺 session_id / 缺 cwd / 截断 JSON）一律 rc=0、
+  stdout 与 stderr **零字节**、不产生任何文件。另补三例同样 rc=0/零输出：
+  库文件缺失（criteria §1 明列场景）、状态目录不可写、恶意 session_id
+  （`../../escaped` 被清洗为 `.._.._escaped.json`，未穿越出目录）。
+- §3 还原判据：4 空格 / tab / 紧凑无末尾换行三种**非 2 空格**夹具
+  install→uninstall 后 `deepStrictEqual` 原文、顶层与 hooks 键序相等、
+  递归键序相等；三种夹具均带 `notStrictEqual` 守卫证明不与实现同源。
+  另用 `stringify(,,2)+\n` 夹具断言保底**逐字节一致**。
+- §2 备份首份不覆盖：两次 install 后备份 === 首次安装前原文；uninstall 亦不刷新。
+- §2 幂等：连续三次 install 配置不变，每事件本插件命令恰 1 条。
+- §2 事件覆盖：7 个事件 key 齐全，条目均带 marker，`isInstalled` 为 true。
+- §2 摘除粒度（本轮返工核心）：install 后往 Stop 分组 `hooks[]` 追加用户命令 →
+  uninstall 后该分组存活、只剩用户那条、MARKER 已摘、`removed` 按 command 粒度
+  计 7。重复 install 路径同样不吃掉同分组内用户命令。
+- §2 身份只认 command：`marker=true 但 command 指向别处`的条目 uninstall 后仍在。
+- §2 损坏 settings.json：install 抛错且原文件逐字节未变（不当空文件覆盖）。
+- §2 引号安全：把插件复制到 `plugin dir with spaces/` 与 `weird'quote dir/`，
+  经 `/bin/sh -c` 实跑生成的 command，rc=0、stderr 零字节、状态文件正常产出。
+- §4 隔离：真实 `~/.claude/settings.json.bak-pet-agent-status` 不存在、
+  真实 `~/.local/state/pet-agent-status` 不存在（均写成断言）。
+
+### 反证（改坏实现看断言是否转红，验断言非恒真）
+
+在 /tmp 的仓库**副本**上做（绝不动产品源文件），副本基线先复现全绿。
+
+| 反证 | 结果 |
+|---|---|
+| A `stripFromList` 退回「整分组删」 | 转红 ✓ 2 条（正是本轮返工要防的缺陷） |
+| B `isOurs` 追加认 MARKER | **仍绿** —— 见下方说明，非断言失效 |
+| B' 删除判据本身（`stripOurCommand`）改认 MARKER | 转红 ✓ 3 条 |
+| C `backup` 去掉首份短路 | 转红 ✓ 2 条 |
+| D `hookCommand` 退回裸拼无引号 | 转红 ✓ 2 条 |
+| E `readSettings` 把损坏 JSON 当空对象 | 转红 ✓ 1 条 |
+| F `writeSettings` 单向按 key 排序 | 转红 ✓ 4 条 |
+
+**B 仍绿的原因已查明，是实现的额外韧性而非探针/断言问题**：本轮返工把摘除逻辑
+单一化到 `stripOurCommand` 之后，`isOurs` 只是「要不要进摘除流程」的前置筛，
+真正的身份判据下沉到了 `stripOurCommand` 里那句 `h.command === command`。
+即便 `isOurs` 被改坏成认 MARKER，冒名条目进了摘除流程也会因无 command 命中而
+`removed:0` 原样保留。换到真正的判据层做 B'，立刻转红 3 条 —— 断言载重确认。
+这一点值得记：**返工把双判据收敛成单判据后，旧的「改 isOurs」探针已不再是
+有效反证点**，后续复验请改打 `stripOurCommand`。
+
+### 三条红线核对
+
+- **插件形态**：`hooks/` + `lib/` 全量 require 清单人工核过，只有
+  `path/fs/os/tty` 四个 Node 内建 + 仓内相对模块；无 `eval`/`new Function`、
+  无 `http(s)`/`net`/`fetch`、无自更新、无 child_process（本 story 范围内）。
+  `require(path.join(LIB, 'xxx.js'))` 是固定常量拼接，不含用户输入，非禁止的
+  「动态拼接 require」。改 `~/.claude/settings.json` 与读写状态目录均在 README
+  「权限披露」表内已声明。PASS
+- **设计红线**：本 story 无 panel UI 产出，不适用。
+- **协议红线**：落盘字段与 PROTOCOL.md schema:1「字段」表逐项一致且无多余键，
+  映射表 7 行全对，`schema` 恒 1，本轮未改 PROTOCOL.md。PASS
+
+### 范围外观察（不阻塞 PASS，留给后续 story）
+
+1. `scripts/ralph/criteria/US-002.md` 与根 `criteria/US-002.md` 已分叉，前者是旧版。
+   建议监工删掉或做成软链，避免后续 agent 取到过时判据（本轮已按根目录版判定）。
+2. hook 未做 stdin 大小上限，超大 payload 会全量进内存；实际事件体积小，风险低。
+3. `detectTty` 每次调用 `readdirSync('/dev')` 全表扫，每事件一次；可缓存（US-003/005）。
+4. nvm 换 Node 版本后已装 hook 的 `execPath` 会静默失效而 `isInstalled` 查不出来
+   （US-004 面板可补可执行性探测）。前两轮已记，本轮仍未解，非本 story 判据。
+5. `stripOurCommand` 保住分组时会去掉 MARKER 同名字段；用户自有字段与 MARKER
+   撞名时会被误去，实际不会发生，暂不处理。
+
+VERIFICATION REPORT - US-002
+node --check:            PASS
+hook 事件映射测试:       PASS（7 事件逐一，自造 payload）
+installer 幂等/卸载:     PASS（语义等价+键序+保底逐字节+备份首份不覆盖+摘除粒度）
+静默失败保护:            PASS（14 种坏路径 rc=0 且零字节输出）
+引号安全:                PASS（含空格/含单引号目录实跑）
+三条红线:                PASS
+Overall: PASS
+
+<verification_passed>US-002</verification_passed>

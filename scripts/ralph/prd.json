@@ -36,11 +36,11 @@
       ],
       "criteriaFile": "criteria/US-002.md",
       "priority": 2,
-      "passes": true,
+      "passes": false,
       "verificationPasses": false,
-      "verificationNotes": "双轨 codex FAIL（2026-09-10T10:42:50Z，仲裁=UPHELD）：见 scripts/ralph/.codex-acceptance/report-US-002.md（该目录被 gitignore，报告不在仓内 .codex-acceptance/）。\n\n返工完成：缺陷属实且已独立复现 —— isOurs 按「分组内某条 command」认领却按整个分组删除，用户追加进本插件分组的命令会被连带抹掉。修法：新增 stripOurCommand/stripFromList，摘除粒度统一为 command 粒度，install 幂等去重与 uninstall 共用同一套逻辑；分组还剩用户命令时保住该分组并去掉 MARKER。测试 21→23（补「同一分组内共存」两条，原用例只覆盖了不同分组，差一个容器层级）。反证：退回整分组删 → 新断言转红。门禁：node --check 全过，64 条测试全绿。criteria/US-002.md §2/§4 与 knowledge.md 已同步落盘判据。待第 4 轮验证。",
+      "verificationNotes": "监工裁决2（2026-09-10，熔断复位）：双轨复现的缺口为真实缺陷——uninstall 对 removed==0 的事件键（用户原有的空数组键如 PreCompact: []）也执行了删键，违反对象等价还原。修法：install 时在本插件标记条目内记录该事件键是否由插件创建（如 createdKey:true），uninstall 只删除「标记为插件创建 且 摘除后为空」的键；用户原有键（含空数组）一律保留。补两条断言：① 用户已有 PreCompact:[] 时 install→uninstall 后该键仍在且为 []（deepStrictEqual 全对象）；② 插件创建的键卸载后彻底消失。其余判据维持裁决1不变。",
       "notes": "fixtures 为按官方文档结构预置的样例；监工会用真实会话冒烟并替换为实录 payload。",
-      "reopenCount": 1
+      "reopenCount": 0
     },
     {
       "id": "US-003",
