@@ -50,17 +50,17 @@
         "tool/index.js activate(pet)：await pet.scheduler.every(2000, tick) 存 taskId；deactivate 清理",
         "lib/aggregate.js（now 可注入纯函数）：error 推导（running/waiting 且 ts>60s 且 pid 不存活）、idle（done/ended 或 ts>20min）、unknown（损坏/高 schema）、waiting 恒置顶排序、idle>20min 移除",
         "状态迁移联动：done→playAnim+bubble，waiting→bubble；同会话同状态 5 分钟节流；pet 对象可注入 mock 断言调用序列",
-        "快照经 pet.events.emit('agent-status:snapshot', rows) 推送，行结构含 panel 渲染所需全部字段（agent/form/project/state/subline/timeText）",
+        "快照经 pet.events.emit('agent-status:snapshot', {rows, summary}) 推送（2026-09-10 监工裁决3 追认包装对象为正式契约：summary 供汇总胶囊，panel 零业务计算），行结构含 panel 渲染所需全部字段（agent/form/project/state/subline/timeText）",
         "tests/aggregate-test.js 与 tests/tool-lifecycle-test.js 全绿（时间注入不 sleep；pid 存活探测可注入）",
         "node --check 全部通过"
       ],
       "criteriaFile": "criteria/US-003.md",
       "priority": 3,
       "passes": true,
-      "verificationPasses": false,
-      "verificationNotes": "已按裁决返工（DONE_ANIM 'receive-message'→'unread'，并加宿主合法动作名白名单断言 + 真实传参校验），待复验。原 FAIL 记录：FAIL（设计红线）：lib/pet-link.js:12 的 DONE_ANIM='receive-message' 不是宿主认得的动作名，done 联动的 playAnim 在生产里被静默丢弃，DESIGN.md「done → pet.playAnim（收到消息动画）」不生效。证据：宿主 demo/renderer.js:2959-2964 只在 s==='wake' 或 ANIM[s]/STATE_FALLBACK[s] 命中时 setState，两者都不命中就什么都不做；ANIM 键全集见 character-registry.js:126（idle/walk/sleep/wake/speak/send/drag/unread/edgehide/peek/unpeek/greet/dropempty/dropfull），STATE_FALLBACK 见 renderer.js:22，receive-message 两个集合都不在。与本轮自己修的「done 被 idle 盖住成死代码」同型复发：上游判定修好了，下游动画名仍落不到实处。仓内 122 条测试全绿拦不住，因为 mock pet 只记「playAnim 被调用」，不校验参数是宿主合法动作名（正是 AGENTS.md 门禁禁止的「断言某函数被调用」）。修法：DONE_ANIM 换成 'unread'（语义即「收到消息」，且同时在 ANIM 与 STATE_FALLBACK 里，角色包缺素材可回落 idle），次选 'greet'；并在测试里加宿主合法动作名白名单断言锁死，防再次改名溜过。其余各条均 PASS：node --check 全过、122 条测试退出码 0、scheduler await+cancel、error/idle 判据边界（60_000 严格大于、pid=null 不判 error）、排序（waiting 置顶+组内 ts 降序）、5min 节流窗口（299_999 内不重复、300_000 后可再喊）、行结构 7 字段齐全、criteria §3 独立脚本输出序 [waiting, running, done, error] 且 error 确来自 pid 探测；协议红线与插件形态红线均无破坏。",
-      "notes": "宿主动画冲突（睡眠/抓起）本仓库拿不到宿主状态，按『bubble 永发、playAnim 经可配置守卫函数』实现并留 TODO 注释，由宿主内真机验收定参。",
-      "reopenCount": 1
+      "verificationPasses": true,
+      "verificationNotes": "",
+      "notes": "宿主动画冲突（睡眠/抓起）本仓库拿不到宿主状态，按『bubble 永发、playAnim 经可配置守卫函数』实现并留 TODO 注释，由宿主内真机验收定参。 裁决3：快照载荷契约定为 {rows, summary}，US-004 panel 按此消费。",
+      "reopenCount": 0
     },
     {
       "id": "US-004",

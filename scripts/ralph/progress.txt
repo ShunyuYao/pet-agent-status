@@ -1199,3 +1199,82 @@ state-files 20 = **125 全绿**，退出码均 0（原 122，本轮 +3）。
    error 行不受 20min 淡出规则约束会长期驻留（如真机扰民需监工定判据）。
 
 <story_completed>US-003</story_completed>
+
+================================================================================
+VERIFICATION REPORT - US-003（tool 采集器状态机与宠物联动）
+验证 agent · 2026-09-10 · 对照 criteria/US-003.md
+
+## 1. Automated Verification (Code-Based)
+- node --check：PASS（lib/aggregate.js、lib/pet-link.js、tool/index.js、
+  lib/state-files.js、两个测试文件，全过）
+- node tests/aggregate-test.js：PASS（37 条，退出码 0）
+- node tests/tool-lifecycle-test.js：PASS（19 条，退出码 0）
+- 全量门禁：5 个套件 125 条全绿，退出码均 0
+  （aggregate 37 / tool-lifecycle 19 / claude-hook 22 / claude-installer 27 / state-files 20）
+
+## 2. Model-Based Verification（逐条）
+- [PASS] scheduler 生命周期：tool/index.js:57 `taskId = await pet.scheduler.every(TICK_MS, ...)`
+  确为 await 后的 id；:54 `if (taskId != null) return` 启停串行不重复注册；
+  :62-67 stop 先清 taskId 再 cancel（cancel 抛错不留假 id 挡住下次 start）。
+  TICK_MS=2000 ≥ 宿主 1000ms 下限。
+- [PASS] aggregate 纯函数签名：now / isPidAlive 均从 opts 注入（:92-93）。
+  error 判定四要素齐全且顺序正确（:36-41）：state∈{running,waiting} && age>60_000
+  && pid!=null && !isPidAlive(pid)；error 优先于 idle。
+  idle = done/ended 或 age>20min（:42-43）；idle 超 20min 不进输出行（:102）。
+- [PASS] 排序：sortRows(:73-80) 只有「waiting 置顶 + ts 降序」两档，与 DESIGN.md
+  「排序规则」一致，无自造状态优先级。乱序输入实测见第 3 节。
+- [PASS] 联动节流：pet-link.js:43-49 按 `${sessionId} ${state}` 5min 窗口；
+  :72 迁移驱动（prev===cur 跳过），不是状态驱动。done→playAnim+bubble、
+  waiting→仅 bubble（:79-88），与 DESIGN.md 一致。
+- [PASS] 快照行结构：makeRow(:139-160) 含 agent/form/project/state/subline/
+  timeText/sessionId 全部字段，panel 无需再算业务字段。
+- [PASS] 动作名白名单：DONE_ANIM='unread'。**已对照宿主源码核验**（只读）：
+  demo/core/character-registry.js:126 STATE_DIR_NAME 的 14 个键与
+  demo/renderer.js:22 STATE_FALLBACK（额外只多 think）之并集 = 15 个名字，
+  与 lib/pet-link.js HOST_ANIM_STATES 快照**逐字一致**，快照非自证。
+  'unread'（未读信息）同时在两集合内 → 宿主 renderer.js:2962
+  `else if (ANIM[s] || STATE_FALLBACK[s])` 必命中，且缺素材可回落 idle。
+  测试侧 aggregate-test.js:414 从 mock 调用记录取**实际传参**做白名单断言，
+  不是「断言 playAnim 被调用」。
+
+## 3. 独立复验（/tmp 自写脚本，20 条，跑完已删）
+不复用实施 agent 的夹具/助手，走真实 writeStatus→readSnapshots→aggregate→pet-link
+链路（真实落盘文件，非手搓对象）。全部 20 条 PASS，要点：
+- criteria §3 场景：4 个真实状态文件（running 新 / waiting 旧 / done / running+pid=999999 超时）
+  → 输出序 [sess-wait, sess-run, sess-done, sess-err]，推导态
+  waiting/running/idle(raw=done)/error，与 criteria 预期一致。
+- **error 行确实来自 pid 探测**：反证 isPidAlive 恒真时该行退回 running（非恒真断言）。
+- error 四要素逐个反证：59s 不判 / 60s+1ms 才判 / pid=null 不猜 / done 不参与。
+- idle 起点分流正确：刚过 20min 的 running 不当场消失（idle 起点 ts+20min），
+  41min 才移除；done 超 20min 移除。
+- 乱序 5 行断言输出序 [w-new, w-old, r-new, d, r-old]：waiting 组内也按 ts 降序。
+- 损坏 / schema:99 文件 → unknown 行，state 与 raw 均非 done/ended（绝不误报完成）。
+- 节流：同窗口内重复 tick 仅 2 次调用；过 5min 窗口后可再提醒；waiting 只 bubble。
+- 真实 tick 链路：done 落盘 → 展示态 idle + raw done + 实播 'unread'；
+  且**落盘文件无 raw 字段**，键集恰为 schema:1 闭集（协议红线未破）。
+- 生命周期：mock 只认真实 taskId（存 Promise 即红），实测 await 取 id、
+  重复 start 只注册一次、stop cancel 同一 id、间隔 2000ms。
+
+> 复验过程中我自己的 mock 一度把 SDK 形状写成顶层 pet.bubble（应为 sdk.pet.*，
+> 见 sdk-surface.js ns='pet'），5 条转红。查夹具后确认是我的夹具错、非产品缺陷，
+> 修正后全绿 —— 与仓内测试结论一致。
+
+## 4. 三条红线核对
+- 插件形态：PASS。lib/ tool/ 无 eval / new Function / 动态拼接 require；
+  manifest permissions 仅 storage/pet/ui/events/scheduler，代码只碰
+  scheduler/events/pet 三个面（tool-lifecycle-test 有 Proxy 探针守着）。
+- 设计红线：PASS（本 story 涉及的排序规则与联动文案）。bubble 文案取自
+  locales，与 DESIGN.md「✅ {project} 的差事办完啦～」「✋ {project} 在等你批准」
+  逐字一致，无硬编码中文。panel 视觉属 US-004，本轮不判。
+- 协议红线：PASS。推导态 error/idle/unknown 只在内存；raw 仅存在于内存快照，
+  独立复验已断言其不落盘；schema:1 字段闭集未动。
+
+## 5. 范围外观察（不构成 FAIL，供后续 story 参考）
+1. error 行不受 20min 淡出约束会长期驻留面板（deriveState 里 error 先于 idle 返回，
+   不进 :102 的移除分支）。criteria 未要求，真机是否扰民由监工定。
+2. unknown 行 project 用文件名顶替、ts=0 恒排末尾 —— US-004 渲染时注意。
+3. `form` 恒 'cli'（PROTOCOL.md 无该字段），US-006 若要区分 Codex App 形态须先升协议。
+4. lastNotify 清理只在 onSnapshot 里做，若长期无快照则 Map 短暂驻留 —— 量级极小，无实际影响。
+
+Overall: PASS
+================================================================================
