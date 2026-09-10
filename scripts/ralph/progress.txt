@@ -1009,3 +1009,193 @@ state-files 20 = **122 全绿**，退出码均 0。
    `readdirSync('/dev')` 全表扫（US-005 若跳转频繁可考虑缓存）。
 
 <story_completed>US-003</story_completed>
+
+================================================================================
+VERIFICATION REPORT - US-003（verify agent，独立复验）
+================================================================================
+
+node --check（lib/ tool/ hooks/ tests/ 全量）: PASS
+仓内测试 5 个文件 122 条，退出码全 0:            PASS
+  aggregate-test 34 / claude-hook-test 22 / claude-installer-test 27 /
+  state-files-test 20 / tool-lifecycle-test 19
+
+## 1. Automated Verification — PASS
+
+## 2. Model-Based Verification（逐条）
+
+- `await pet.scheduler.every(2000, tick)` 存 taskId + deactivate cancel + 启停串行：**PASS**
+  tool/index.js:57 确为 `await`；:54 有 `taskId != null` 早返防重复注册；:65 先清 taskId
+  再 cancel（cancel 抛错不会锁死下次 start）。已对照宿主 sdk-surface.js:83-85 确认
+  `scheduler.{every,cancel}` 均为 tool 上下文合法方法。
+- aggregate 纯函数 now/isPidAlive 注入；error/idle 判据：**PASS**
+  独立脚本实测边界：ts 距今恰 60_000ms 不判 error、60_001ms 判 error（严格大于，符合
+  PROTOCOL.md「> 60s」）；pid=null 的 stale running 不判 error；running 超 20min 判 idle；
+  done 且 ts 距今 >20min 不进输出行。
+- 排序（waiting 置顶、组内 ts 降序，其余 ts 降序）：**PASS**
+  乱序输入实测 [w2(新),w1(旧),r1] —— waiting 组内亦按 ts 降序。
+- 联动节流（同 (sessionId,state) 5min 一次）：**PASS**
+  实测 299_999ms 内不重复、300_000ms 后可再喊；running↔waiting 抖动 5 轮仍只喊一次；
+  done 迁移触发 playAnim+bubble 各一次，后续 9 轮 tick 不重复。
+- 快照行 7 字段齐全：**PASS**（agent/form/project/state/subline/timeText/sessionId）
+
+## 3. 独立复验（criteria §3，自写脚本，未复用实施 agent 的临时脚本）
+
+按 criteria 字面场景（running 新 / waiting 旧 / done / running+pid=999999 超时），
+经 `writeStatus` 真实落盘再 `readSnapshots` 读回（夹具与被测上游真实产出同形）：
+输出序 = **[wait-old(waiting), run-new(running), done1(idle), err1(error)]**，与
+criteria 期望一致。error 行确来自 pid 探测：同一份快照改注入 `isPidAlive:()=>true`
+后 err1 回落为 running，证明不是恒真断言。
+
+## 4. 设计红线核对 → 发现 1 项真 FAIL
+
+**FAIL：`pet.playAnim('receive-message')` 在宿主里是静默空操作，DESIGN.md 头号联动
+「done → 收到消息动画」在生产中不会播放任何动画。**
+
+证据链（只读宿主仓，未修改）：
+1. `lib/pet-link.js:12` `DONE_ANIM = 'receive-message'`，:63 在 done 迁移时发出。
+2. 宿主 `demo/core/plugin-runtime/runtime.js:998`：playAnim 经 IPC 转成
+   `{action:'playAnim', state:'receive-message'}` 送进 renderer。
+3. 宿主 `demo/renderer.js:2959-2964` 消费端：
+   `if (s==='wake') {...} else if (ANIM[s] || STATE_FALLBACK[s]) setState(s);`
+   —— **两个分支都不命中就什么都不做，无告警、无回落**。
+4. `ANIM` 的键来自 `character-registry.js:126` 的 `STATE_DIR_NAME`，全集为
+   idle/walk/sleep/wake/speak/send/drag/unread/edgehide/peek/unpeek/greet/
+   dropempty/dropfull；`STATE_FALLBACK`（renderer.js:22）额外只认
+   wake/think/send/drag/unread/edgehide/dropempty/dropfull。
+   **`receive-message` 两个集合都不在。**
+5. 复现判定逻辑的脚本输出：`宿主是否会播放: false → 静默丢弃，setState 根本不被调用`。
+
+为何算 FAIL 而非范围外观察：
+- AGENTS.md 红线 2「设计红线」是每个 story 的固有验收维度，DESIGN.md「宠物联动」节
+  明写 `done → pet.playAnim（收到消息动画）`。动画从不播放 = 该条设计未落地。
+- 这与本轮 commit 自己修的缺陷是**同一型**：`done` 被 `idle` 盖住导致联动成死代码，
+  修好了上游判定，下游发出的动画名却仍落不到实处 —— 「测试绿 ≠ 生产有效」再次复发。
+  仓内 19+34 条测试全绿也拦不住，因为 mock pet 只记录「playAnim 被调用了」，
+  从不校验参数是宿主认得的动作名（正是 AGENTS.md 门禁禁止的「断言某函数被调用」）。
+- criteria §2 第 4 条要求「done→playAnim+bubble 各一次」，字面只约束调用次数，
+  但调用一个宿主必然丢弃的名字，等于该条验收在真机上空转。
+
+**修法建议**（不由 verify agent 执行）：
+- `DONE_ANIM` 换成宿主认得的动作名。语义最贴的是 `'unread'`（未读信息 —— DESIGN.md
+  的「收到消息动画」正是这个意思），且它同时在 `ANIM` 与 `STATE_FALLBACK` 里，
+  角色包缺素材时还能回落 idle，最稳。次选 `'greet'`。
+- 测试侧要加一条**动作名白名单断言**：把宿主的合法动作名集合写进测试常量，
+  断言 `DONE_ANIM` 落在集合内。否则下次改名同样溜过去。
+- 若认为动作名应由宿主真机验收定，也**至少**要换成白名单内的名字再留 TODO ——
+  当前写法不是「待定」，是「确定不生效」。
+
+## 5. 其它红线核对
+
+- 插件形态：lib/ tool/ hooks/ 全量 grep 无 eval / new Function / http(s):// / fetch /
+  child_process / 动态拼接 require；`require(path.join(LIB, 'x.js'))` 是 __dirname +
+  常量字面量，静态可判定。SDK 只用 scheduler/events/pet 三面（tool-lifecycle-test 用
+  Proxy 探针锁死），已逐条对照宿主 sdk-surface.js:61-85 确认均为 tool 上下文合法方法。PASS
+- 协议：PROTOCOL.md 未改，schema 恒 1；`raw` 只在内存快照行，落盘唯一入口
+  `buildRecord` 字段闭集本轮未动（已核 state-files.js:35-52）。推导态不落盘。PASS
+- 隔离：全程未联网、未起 Electron、未写真实 ~/.claude 与 ~/.local/state（测试自带
+  守卫断言已跑过），未修改宿主仓任何文件；自写脚本在 /tmp，已删除。PASS
+
+## 范围外观察（不阻塞，留给后续 story）
+
+1. `pet.bubble` 的第二参 ms 未传，宿主 renderer.js:2939 回落 4000ms —— 合理，但
+   DESIGN.md 未规定气泡时长，US-004 真机验收时可确认 4s 够不够读完。
+2. `playAnimGuard` 缺省恒 true（criteria §6 明确允许 TODO，接口已存在且实测生效：
+   注入 `()=>false` 时降级为仅 bubble）。宿主真机接上后需换真实判定。
+3. 前几轮记的范围外观察（form 字段、unknown 行 project 顶替、error 行不淡出）本轮复核
+   仍成立，未变化。
+
+Overall: **FAIL**（1 项真缺陷：done 动画名宿主不认，DESIGN.md 头号联动生产不生效）
+
+================================================================================
+## US-003 返工（verify agent FAIL 修复：done 动画名宿主不认）— DONE
+
+判据：`scripts/ralph/criteria/US-003.md`（根目录 criteria/ 已于上轮 WIP 删除，
+prd.json 的 criteriaFile 仍写相对路径 `criteria/US-003.md`，实际按 scripts/ralph/ 下捞）。
+
+### 缺陷属实，开工前先独立复现（未采信报告结论，自己读宿主源码）
+
+`lib/pet-link.js` 的 `DONE_ANIM = 'receive-message'` 不是宿主认得的动作名。
+只读宿主仓逐处核对：
+- 消费端 `demo/renderer.js:2957-2963`：
+  `if (s==='wake'){...} else if (ANIM[s] || STATE_FALLBACK[s]) setState(s);`
+  —— **两个集合都不命中就什么都不做**，无告警、无异常、无回落。
+- `ANIM` 键来自 `character-registry.js:126` 的 `STATE_DIR_NAME`：idle/walk/sleep/wake/
+  speak/send/drag/unread/edgehide/peek/unpeek/greet/dropempty/dropfull。
+- `STATE_FALLBACK`（`renderer.js:22`）：wake/think/send/drag/unread/edgehide/
+  dropempty/dropfull。
+`receive-message` 两个集合都不在 ⇒ DESIGN.md:47「done → pet.playAnim（收到消息动画）」
+这条头号联动在真机上**一次都没播过**，且插件侧毫无迹象（不是报错，是静默空转）。
+
+### 修法
+
+`DONE_ANIM` 换 `'unread'`：语义就是「未读信息 / 收到消息」，正对 DESIGN.md 的措辞；
+且它同时在 ANIM 与 STATE_FALLBACK 里，角色包缺这套素材时还能回落 idle。
+另在 `lib/pet-link.js` 存一份宿主合法动作名只读快照 `HOST_ANIM_STATES` 并导出
+（宿主仓是只读参考，不 require 它，避免把宿主变成运行时依赖）。
+
+### 测试：34 → 37，关键是**校验传参**而不是校验调用次数
+
+原来两条 deepStrictEqual 把 `'receive-message'` 字面值抄在期望里，改名只需同步改
+字面值就能继续绿 —— 锁的是「调了几次、什么顺序」，锁不住「名字宿主认不认」。
+这正是 AGENTS.md 门禁禁止的「断言某函数被调用」的变体。改法：
+- 两条既有断言的期望值换成 `DONE_ANIM` 常量（不再抄字面值）；
+- 新增 `DONE_ANIM 必须是宿主合法动作名` 白名单断言（常量层）；
+- 新增 `实际发给 pet.playAnim 的参数落在宿主合法集合内` —— **从 mock 的调用记录里
+  取出真实 arg 校验**，并先断言确实观察到了 playAnim，防写成空断言；
+- `tests/tool-lifecycle-test.js` 在**真实 tick 链路**（hook 落盘 → 采集器 tick → pet）
+  上同样核一遍传参，不只在单元层。
+
+### 反证（判 DONE 的依据，不只看测试变绿）
+
+在 /tmp 的仓库副本上做（tar + git ls-files，含工作区改动），基线先复现全绿：
+
+| 反证 | 结果 |
+|---|---|
+| A 退回 `'receive-message'`（缺陷本身） | 转红 ✓ aggregate + lifecycle 两个文件各 1 条 |
+| B 置空 `''` | 转红 ✓ 两个文件各 1 条 |
+| C 换 `'greet'`（verify 报告点名的次选） | **保持全绿** ✓ 合法名不被误判 |
+
+C 这支是本轮自查抓到的**我自己的错误**：初版把「必须在 STATE_FALLBACK 里」也写成硬
+断言，`greet` 当场判红 —— 但 `greet` 在 ANIM 里，`ANIM[s]` 为真，宿主照样 setState 播放。
+门槛卡错了位置（卡在加分项上而非宿主真正的判定条件上），会把合法选择判死。
+已改为：白名单断言只卡「在不在 ANIM ∪ STATE_FALLBACK」，「有没有替身可回落」降为
+记录性备注。教训写进 knowledge.md。
+
+### 门禁与隔离
+
+`node --check`：lib/ tool/ hooks/ tests/ 全部 JS 通过。
+aggregate **37** + tool-lifecycle 19 + claude-hook 22 + claude-installer 27 +
+state-files 20 = **125 全绿**，退出码均 0（原 122，本轮 +3）。
+真实 `~/.local/state/pet-agent-status` 全程不存在（测试自带守卫断言）；
+未联网、未起 Electron、**未修改宿主仓任何文件**（只读 sed -n 看源码）。
+/tmp 副本与临时文件跑完已删。
+
+### 三条红线核对
+
+- 插件形态：本轮只增一个常量数组与断言，无新增 require（**没有** require 宿主仓）、
+  无 eval/动态 require/自更新/联网/正文采集。PASS
+- 设计：DESIGN.md:47 的 done→playAnim 联动现在真能落到宿主 setState 上，本 story
+  的设计红线缺口已闭合。panel 视觉验收仍在 US-004。PASS
+- 协议：未动 PROTOCOL.md，schema 恒 1；`HOST_ANIM_STATES` 只在内存，不落盘。PASS
+
+### 判据与知识同步
+
+- `scripts/ralph/criteria/US-003.md` §2 增「动作名必须在宿主合法集合内 + 必须校验实际
+  传参」验收项，§6 增对应失败模式**及反向过度收紧的警告**（greet 合法，别判红）。
+- `knowledge.md` 新增「传给宿主的『名字』必须来自宿主的合法集合」一节，含可迁移推论：
+  凡把字符串交给外部系统查表的地方（动作名/事件名/状态名）都要在仓内存合法集合快照
+  并断言真实传参；判据是「外部认不认」而非「我方调没调」。这是「测试绿 ≠ 生产有效」
+  的第四次复发（前三次是夹具形态不真实，这次是参数取值不真实）。
+
+### 范围外观察（非 FAIL，留给后续）
+
+1. 白名单 `HOST_ANIM_STATES` 是宿主源码的**手工快照**，宿主将来增删动作名不会自动同步。
+   本仓不 require 宿主（红线：不得依赖宿主代码），只能靠这份快照 + 注释指明出处；
+   建议监工在宿主动作集变动时顺手同步这一处。
+2. `playAnimGuard` 缺省仍恒 true（criteria §6 允许 TODO，接口已存在）；宿主真机接上
+   宠物状态后需换真实判定（睡眠/被抓起时不抢动画）。
+3. 前几轮记的仍有效：`form` 字段 PROTOCOL.md 里没有故恒 'cli'（US-006 若要区分 App
+   形态须先改协议）；unknown 行 project 用文件名顶替（US-004 渲染注意）；
+   error 行不受 20min 淡出规则约束会长期驻留（如真机扰民需监工定判据）。
+
+<story_completed>US-003</story_completed>

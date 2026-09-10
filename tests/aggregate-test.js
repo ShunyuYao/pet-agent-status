@@ -10,7 +10,8 @@ const path = require('path');
 const ROOT = path.join(__dirname, '..');
 const sf = require(path.join(ROOT, 'lib', 'state-files.js'));
 const agg = require(path.join(ROOT, 'lib', 'aggregate.js'));
-const { createPetLink, THROTTLE_MS } = require(path.join(ROOT, 'lib', 'pet-link.js'));
+const { createPetLink, THROTTLE_MS, DONE_ANIM, HOST_ANIM_STATES } =
+  require(path.join(ROOT, 'lib', 'pet-link.js'));
 const { createNodeI18n } = require(path.join(ROOT, 'lib', 'i18n.js'));
 
 const T0 = 1789000000000;   // 固定基准，测试绝不用真实时钟
@@ -291,7 +292,7 @@ test('running → done 触发 playAnim + bubble（顺序与文案）', () => {
   link.onSnapshot([row({ state: 'running' })], m, { now: T0, t });
   link.onSnapshot([row({ state: 'done' })], m, { now: T0 + 2000, t });
   assert.deepStrictEqual(m.calls, [
-    ['playAnim', 'receive-message'],
+    ['playAnim', DONE_ANIM],
     ['bubble', t('bubble.done', { project: 'alpha' })]
   ]);
 });
@@ -391,9 +392,51 @@ test('全链路：done 落盘后宠物真的提醒（展示态是 idle 也照喊
   assert.strictEqual(out.rows[0].raw, 'done', '落盘态原样带出，供联动判定迁移');
   link.onSnapshot(out.rows, m, { now: T0 + 2000, t });
   assert.deepStrictEqual(m.calls, [
-    ['playAnim', 'receive-message'],
+    ['playAnim', DONE_ANIM],
     ['bubble', t('bubble.done', { project: 'demo' })]
   ], '差事办完必须喊——只看展示态的话 done 永远被 idle 盖住，这个提醒就成了死代码');
+});
+
+// ---- 6.1 动作名必须是宿主认得的（否则 playAnim 静默丢弃 = 另一种死代码）----
+//
+// 上面那两条 deepStrictEqual 用的是 DONE_ANIM 常量，改名不会让它们转红 ——
+// 它们锁的是「调了几次、什么顺序」，锁不住「名字宿主认不认」。
+// 真正载重的是下面这条白名单断言：宿主消费端 renderer.js 写的是
+// `else if (ANIM[s] || STATE_FALLBACK[s]) setState(s);`，两个集合都不命中就
+// 什么都不做（无告警、无回落），所以名字写错 = DESIGN.md 的头号联动在生产里空转。
+test('DONE_ANIM 必须是宿主合法动作名（写错则 playAnim 被宿主静默丢弃）', () => {
+  assert.ok(HOST_ANIM_STATES.includes(DONE_ANIM),
+    `DONE_ANIM='${DONE_ANIM}' 不在宿主 ANIM/STATE_FALLBACK 全集里，` +
+    `宿主 renderer 会静默丢弃这次 playAnim，动画在真机上根本不播。` +
+    `合法全集：${HOST_ANIM_STATES.join('/')}`);
+});
+
+test('实际发给 pet.playAnim 的参数落在宿主合法动作名集合内（拦截参数而非调用次数）', () => {
+  const link = createPetLink();
+  const m = mockPet();
+  link.onSnapshot([row({ state: 'running' })], m, { now: T0, t });
+  link.onSnapshot([row({ state: 'done' })], m, { now: T0 + 2000, t });
+  const anims = m.calls.filter((c) => c[0] === 'playAnim').map((c) => c[1]);
+  assert.ok(anims.length > 0, '这条用例要真的观察到 playAnim 参数，否则是空断言');
+  for (const name of anims) {
+    assert.ok(HOST_ANIM_STATES.includes(name), `playAnim('${name}') 宿主不认识`);
+  }
+});
+
+// 'unread' 除了语义最贴，还额外在 STATE_FALLBACK 里 —— 角色包缺「未读信息」素材时
+// 宿主能回落 idle。这只是本次选型的加分项，**不是宿主的硬要求**：
+// 只要名字在 ANIM 里（如 greet），`ANIM[s]` 为真，宿主照样 setState 播放。
+// 所以这条只做记录性断言，不把「必须有 fallback」升成验收门槛 ——
+// 真正的红线判据是上面那条「必须在 HOST_ANIM_STATES 内」。
+test('DONE_ANIM 选型备注：unread 额外享有 STATE_FALLBACK 替身（缺素材可回落 idle）', () => {
+  const HOST_STATE_FALLBACK_KEYS = ['wake', 'think', 'send', 'drag', 'unread',
+    'edgehide', 'dropempty', 'dropfull'];
+  // 换成 greet 等只在 ANIM 里的名字仍然合法（宿主会播），只是缺素材时没有替身。
+  if (!HOST_STATE_FALLBACK_KEYS.includes(DONE_ANIM)) {
+    assert.ok(HOST_ANIM_STATES.includes(DONE_ANIM),
+      `DONE_ANIM='${DONE_ANIM}' 既不在 STATE_FALLBACK 也不在 ANIM，宿主会静默丢弃`);
+  }
+  assert.ok(HOST_ANIM_STATES.includes(DONE_ANIM));
 });
 
 test('全链路：waiting 落盘后只 bubble 不 playAnim', () => {

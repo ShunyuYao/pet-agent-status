@@ -106,3 +106,33 @@ uninstall 读它决定收不收。两个坑：
 早期合成样例（那次冒烟没触发权限提示），**会话 id 与其余 6 份不同**。凡需要「同一会话
 连续多事件」的用例，别直接混用这 7 份夹具 —— 会写出两个状态文件。测试里已加一条
 「实录夹具 session_id 一致」的漂移守卫，重录后先看它。
+
+## 传给宿主的「名字」必须来自宿主的合法集合（US-003 裁决换来的）
+
+`pet.playAnim(name)` 的 name 不是自由字符串。宿主消费端（`demo/renderer.js`）写的是
+`if (s==='wake') {...} else if (ANIM[s] || STATE_FALLBACK[s]) setState(s);`
+—— **两个集合都不命中就什么都不做，无告警、无异常、无回落**。所以名字写错的代价不是
+报错，是「插件这边一切正常、真机上什么都不发生」。US-003 首版写的
+`'receive-message'` 就是这样：DESIGN.md 的头号联动 done→动画，一次都没播过。
+
+合法全集（`lib/pet-link.js` 的 `HOST_ANIM_STATES` 存了只读快照）：
+ANIM 键来自 `character-registry.js` 的 `STATE_DIR_NAME`（idle/walk/sleep/wake/speak/
+send/drag/unread/edgehide/peek/unpeek/greet/dropempty/dropfull），
+`STATE_FALLBACK`（renderer.js）额外含 think。**只要在 ANIM 里宿主就会播**；
+同时在 STATE_FALLBACK 里的（unread/greet 之外还有 send/drag 等）多一层保险：
+角色包缺该套素材时能回落。选 `unread`（未读信息）是因为语义正是「收到消息」。
+
+**为什么 122 条测试拦不住**：mock pet 只记「playAnim 被调用了」，不校验参数 ——
+正是 AGENTS.md 门禁明令禁止的「断言某函数被调用」。断言调用次数与顺序，锁不住
+「这个名字宿主认不认」。修法是把宿主合法集合写进测试常量做白名单断言，
+且**用例要观察真实传参**（从 mock 的调用记录里取 arg 校验），不是比对常量自己。
+
+可迁移推论：**凡是把字符串交给宿主/外部系统去查表的地方**（动作名、事件名、
+状态名），都要在仓内存一份合法集合快照并写成断言。判据是「外部认不认」，
+不是「我方调没调」—— 后者恒真，前者才载重。这是「测试绿 ≠ 生产有效」的第四次复发
+（前三次都是夹具形态不真实，这次是参数取值不真实）。
+
+写这类白名单断言时注意别过度收紧：US-003 本轮一度把「必须在 STATE_FALLBACK 里」
+也升成硬门槛，结果把 verify 报告点名认可的次选 `greet` 判红了 —— 而 `greet` 在
+ANIM 里，宿主照样播。**门槛要卡在宿主真正的判定条件上**（在不在 ANIM/STATE_FALLBACK），
+额外的加分项（有没有替身）只作记录，不作门禁。

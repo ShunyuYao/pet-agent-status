@@ -14,6 +14,7 @@ const ROOT = path.join(__dirname, '..');
 const sf = require(path.join(ROOT, 'lib', 'state-files.js'));
 const tool = require(path.join(ROOT, 'tool', 'index.js'));
 const { createNodeI18n } = require(path.join(ROOT, 'lib', 'i18n.js'));
+const { DONE_ANIM, HOST_ANIM_STATES } = require(path.join(ROOT, 'lib', 'pet-link.js'));
 
 const T0 = 1789000000000;
 const t = createNodeI18n('zh-CN').t;
@@ -215,9 +216,15 @@ function collectorOn(dir, over) {
     clock = T0 + 2000;
     m.state.every[0].fn();
     assert.deepStrictEqual(m.state.petCalls, [
-      ['playAnim', 'receive-message'],
+      ['playAnim', DONE_ANIM],
       ['bubble', t('bubble.done', { project: 'demo' })]
     ], '完成提醒是 DESIGN.md 的头号联动，必须在真实 tick 链路上跑通');
+    // 光断言「playAnim 被调用了」不够：名字宿主不认的话，这次调用在真机上
+    // 会被 renderer 静默丢弃。真实 tick 链路上再核一次参数。
+    for (const [m0, arg] of m.state.petCalls.filter((c) => c[0] === 'playAnim')) {
+      assert.ok(HOST_ANIM_STATES.includes(arg),
+        `${m0}('${arg}') 不是宿主合法动作名，真机上不会播任何动画`);
+    }
   });
 
   await test('同状态连续 tick 不重复提醒（2 秒一次气泡是灾难）', async () => {
