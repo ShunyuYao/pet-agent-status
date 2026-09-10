@@ -36,7 +36,7 @@
       ],
       "criteriaFile": "criteria/US-002.md",
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "verificationPasses": false,
       "verificationNotes": "监工裁决2（2026-09-10，熔断复位）：双轨复现的缺口为真实缺陷——uninstall 对 removed==0 的事件键（用户原有的空数组键如 PreCompact: []）也执行了删键，违反对象等价还原。修法：install 时在本插件标记条目内记录该事件键是否由插件创建（如 createdKey:true），uninstall 只删除「标记为插件创建 且 摘除后为空」的键；用户原有键（含空数组）一律保留。补两条断言：① 用户已有 PreCompact:[] 时 install→uninstall 后该键仍在且为 []（deepStrictEqual 全对象）；② 插件创建的键卸载后彻底消失。其余判据维持裁决1不变。",
       "notes": "fixtures 为按官方文档结构预置的样例；监工会用真实会话冒烟并替换为实录 payload。",
