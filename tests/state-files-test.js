@@ -301,20 +301,26 @@ test('en 与 zh-CN 词表 key 集合一致（避免上线才发现漏翻）', ()
 });
 
 // ---- 8. 零硬编码中文（AGENTS.md 文案双语规则）----
-test('lib/ 代码里没有中文字面量（中文只许在 locales/*.json）', () => {
+test('lib/ hooks/ 代码里没有中文字面量（中文只许在 locales/*.json）', () => {
   const cjk = /[一-鿿]/;
   const offenders = [];
-  for (const file of fs.readdirSync(path.join(ROOT, 'lib'))) {
+  // 目录随 story 推进逐步出现（US-002 加 hooks/，US-003 加 tool/，US-004 加 panel/）；
+  // 不存在的目录跳过，存在了就自动纳入扫描，避免新代码绕过这条门禁。
+  const scanned = ['lib', 'hooks', 'tool'].filter((d) => fs.existsSync(path.join(ROOT, d)));
+  for (const dir of scanned) {
+  for (const file of fs.readdirSync(path.join(ROOT, dir))) {
     if (!file.endsWith('.js')) continue;
-    const src = fs.readFileSync(path.join(ROOT, 'lib', file), 'utf8');
+    const src = fs.readFileSync(path.join(ROOT, dir, file), 'utf8');
     src.split('\n').forEach((line, i) => {
       // 注释可以写中文，字符串字面量不行
       const code = line.replace(/\/\/.*$/, '').replace(/\/\*.*?\*\//g, '');
       for (const m of code.matchAll(/(['"`])(?:\\.|(?!\1)[^\\])*\1/g)) {
-        if (cjk.test(m[0])) offenders.push(`lib/${file}:${i + 1} ${m[0]}`);
+        if (cjk.test(m[0])) offenders.push(`${dir}/${file}:${i + 1} ${m[0]}`);
       }
     });
   }
+  }
+  assert.ok(scanned.includes('hooks'), 'hooks/ 已存在就必须被扫到');
   assert.deepStrictEqual(offenders, [], `发现硬编码中文：\n${offenders.join('\n')}`);
 });
 
