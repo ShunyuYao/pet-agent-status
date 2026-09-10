@@ -18,8 +18,8 @@
       "criteriaFile": "criteria/US-001.md",
       "priority": 1,
       "passes": true,
-      "verificationPasses": false,
-      "verificationNotes": "上轮 codex FAIL（仲裁 UPHELD）指出的缺口已修：readSnapshots 的 startsWith('.tmp-') 会吞掉合法的 .tmp- 前缀 sessionId。改为临时文件补 .tmp 后缀 + 读侧只按后缀过滤，补 2 条回归测试（commit 07ed3e1）。待复验。",
+      "verificationPasses": true,
+      "verificationNotes": "",
       "notes": "PROTOCOL.md 已冻结，实现服从文档；发现文档矛盾停下写进 progress.txt 交监工，不擅自改协议。",
       "reopenCount": 1
     },
@@ -36,7 +36,7 @@
       ],
       "criteriaFile": "criteria/US-002.md",
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "verificationPasses": false,
       "verificationNotes": "",
       "notes": "fixtures 为按官方文档结构预置的样例；监工会用真实会话冒烟并替换为实录 payload。"

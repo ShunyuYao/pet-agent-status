@@ -127,3 +127,141 @@ PROTOCOL.md 的 sessionId 白名单 `[A-Za-z0-9._-]` 允许 ID 以 `.tmp-` 开�
 US-006 的前置门已解锁，可在后续轮次开工（本轮未动，不越界）。
 
 <story_completed>US-001</story_completed>
+
+================================================================================
+## VERIFICATION REPORT — US-001（复验，reopenCount=1）  2026-09-10
+
+**结论：PASS**
+
+### 1. Automated Verification (Code-Based)
+- `node --check`：`lib/state-files.js`、`lib/i18n.js`、`tests/*.js` 全部通过。
+  （`tool/`、`hooks/`、`panel/` 目录本轮尚不存在，属 US-002+ 范围，不计 FAIL。）
+- `node tests/state-files-test.js`：退出码 0，**20 passed**（含本轮新增 2 条回归）。
+
+### 2. Model-Based Verification
+- **manifest 契约核对：PASS（未凭记忆，实跑宿主校验器）**
+  用只读宿主仓 `demo/core/plugin-runtime/manifest.js` 的 `loadManifest()` 实际加载本仓
+  manifest.json：通过，无抛错。逐字段核对：id `pet-agent-status` 合 `ID_RE` 且无 `..`；
+  version `0.1.0` 合宽松 semver；kind `["tool","panel"]` ⊂ KINDS；apiVersion 1 为 ≥1 整数；
+  activation `opt-in` 合法；permissions 五项经 `requestedGrants()` 原样返回；
+  `entry.tool="tool/index.js"` 为 string（校验器只查类型不查文件存在）；
+  `entry.panel.src="panel/panel.html"` width 320 height 420 transparent:false（boolean）；
+  入口路径均为相对且不含 `..`，未越界。
+- **原子写流程：PASS**。`writeStatus` 先 `mkdirSync(recursive)`，再写同目录
+  `.tmp-<id>-<pid>-<rand>.tmp`，最后 `renameSync` 覆盖；失败路径 unlink 临时文件后再抛。
+  无任何直接 `writeFileSync` 到目标路径的写法。
+- **readSnapshots 容错：PASS**。损坏 JSON→`unparsable`、缺必填→`missing:<key>`、
+  schema>1→`schema-too-new`，一律进 unknown 计数不 throw；目录不存在返回空快照不抛。
+  `validateRecord` 逐项覆盖 PROTOCOL.md 字段表（含 tty/pid 可 null 的类型分支）。
+- **sessionId 清洗：PASS**。`[^A-Za-z0-9._-]→_`，空串兜底为 `_`。
+- **i18n 零硬编码中文：PASS**。CJK 正则扫 `lib/`：命中全部落在 `//` 注释行；
+  字符串字面量内零命中。`locales/zh-CN.json` 与 `en.json` key 集合完全一致（各 25 条）。
+
+### 3. 独立复验（自写脚本，未复用仓内测试，跑完已删）
+在 `/tmp/verify-us001.js` 另写 9 组断言，全部通过：
+1. mkdtemp 目录写一条 running 快照后 `cat` 原始 JSON 逐字段对齐 PROTOCOL.md ——
+   实际落盘内容：
+   `{"schema":1,"agent":"claude-code","sessionId":"abc-123","cwd":"/Users/x/projects/demo",`
+   `"project":"demo","tty":"/dev/ttys004","pid":4242,"state":"running",`
+   `"lastEvent":"UserPromptSubmit","ts":1789033968238,"source":"hook"}`
+   —— `ts` 为 13 位 Unix 毫秒；key 集合与协议表精确相等（无多余字段）。
+2. 写后目录仅剩 `abc-123.json`，无临时残留。
+3. **本次 reopen 的核心缺陷已修**：`.tmp-session` / `.tmp-halfway` 两个合法会话写入后
+   `records.length===2`、`unknownCount===0`，不再被静默吞掉。
+4. 与真实产出同形的半截临时文件 `.tmp-abc-999-xk3q9z.tmp` 被后缀过滤忽略，且**不计 unknown**。
+5. 损坏/缺必填/schema:99 三文件 → `unknownCount===3`，且 schema 过高者未被映射成 done。
+6. `../../etc/passwd` → 落盘 `.._.._etc_passwd.json`，`path.dirname` 严格等于临时目录，
+   未穿越；`/etc/passwd.json` 未被创建。
+7. 不存在目录读取不抛。8. 多级不存在目录 `mkdir -p` 后写入成功。
+9. **子进程实测** `PET_AGENT_STATUS_DIR` 覆盖生效（`stateDir()` 输出等于临时目录），
+   全程未触碰真实 `~/.local/state`。
+
+### 4. 缺陷根因闭环核查（本轮重点）
+- 全仓检索 `startsWith`：`lib/`、`hooks/`、`panel/` **零命中**，前缀判定已彻底移除；
+  `.tmp-` 字样仅剩临时文件名构造与一条警示注释。读侧判据单一化为 `endsWith('.json')`。
+- **夹具同形性反证**：拦截 `fs.renameSync` 捕获真实临时文件名 `.tmp-s-36481-m56pkg.tmp`，
+  确认 `endsWith('.tmp')===true`、`endsWith('.json')===false`，且匹配测试夹具形态
+  `.tmp-<id>-<pid>-<rand>.tmp`。上轮"夹具造了现实中不存在的 `.tmp-halfway.json`"这一
+  逃逸通道已封死 —— 这是判 PASS 的关键依据，不只看测试变绿。
+
+### 5. 三条红线核对
+- 插件形态：`lib/` 只用 fs/os/path 三个 Node 内建，用途限于状态目录读写（属 README 权限
+  披露范围）；无 eval / new Function / 动态拼接 require（已 grep 确认零命中）；
+  无自更新逻辑；记录字段不含会话正文。**PASS**
+- 设计红线：本 story 无 panel UI 产出（`panel/` 尚不存在），不适用。
+- 协议红线：schema 恒 1，字段与 PROTOCOL.md 表逐项一致，未擅自改协议。**PASS**
+
+### 6. 范围外观察（非 FAIL，供后续参考）
+- criteria 第 2 节原文写「先写同目录 `.tmp-` 前缀临时文件」，实现现为「`.tmp-` 前缀 **且**
+  `.tmp` 后缀」。这是上轮返工的正确结果（前缀仍在，仅额外补后缀作为唯一判据），
+  与 criteria 不冲突且更严；建议监工顺手把 criteria/US-001.md 第 11 行与 knowledge.md
+  的命名铁律措辞对齐，避免后续 agent 照旧文改回前缀判定。
+- `entry.tool` 指向的 `tool/index.js` 目前不存在。宿主 `loadManifest` 只校验类型不校验
+  文件存在，故不影响本 story；实际加载需在 US-002+ 补齐该文件。
+- `writeStatus` 中 `renameSync` 前无 `fsync`，极端掉电下理论上可能丢内容。criteria 只要求
+  tmp+rename 原子性（防读者读到半截），未要求持久化保证，不判 FAIL。
+
+Overall: **PASS**
+
+================================================================================
+## US-002 Claude Code hooks 一键接入 — DONE (commit 2389c4b)
+
+产出：hooks/claude-status-hook.js、lib/claude-events.js、lib/claude-hooks-installer.js、
+lib/tty-detect.js、tests/claude-hook-test.js、tests/claude-installer-test.js。
+
+门禁：node --check 全过；claude-hook 21 + claude-installer 15 + state-files 20 = 56 全绿。
+隔离自证：真实 `~/.local/state/pet-agent-status` 全程不存在，真实 `~/.claude/settings.json`
+无 `.bak-pet-agent-status` 产生（两条断言写进测试，不只是跑完人工看一眼）。
+
+**注意：`criteria/US-002.md` 不存在**（整个 criteria/ 目录都没有，US-001 那份也没有）。
+本轮按 prd.json 的 acceptanceCriteria + PROTOCOL.md 映射表实施，逐条对齐；
+建议监工确认 criteria 文件是有意省略还是漏放。
+
+### 关键决策与事实（供后续 story 复用）
+
+- **hook 侧「绝不阻塞」怎么落实**：整个 handle() 包 try/catch 后无条件 exit(0)；
+  stdin 另加 3s unref 定时器兜底（万一宿主不关 stdin，不留僵尸）。测试用 8 种坏输入
+  （空/非 JSON/标量/null/缺 session_id/缺 cwd/未知事件/无事件名）+ 状态目录不可写，
+  九种都断言 exit 0 且不产出坏文件。
+- **pid 写 `process.ppid` 不是 `process.pid`**：hook 自己写完就退出，拿它做 US-003 的
+  error 存活探测恒为「不存活」，会把所有会话误判成 error。父进程才是 Claude Code 本体。
+- **tty 反查用 fstat 的 rdev**（lib/tty-detect.js）：macOS 上 `readlink('/dev/fd/N')`
+  对 tty **返回 EINVAL**（本机实测，Linux 那套写法在这儿不通）。改成取 fd 的 rdev，
+  再扫 /dev 下 `ttys[0-9]+` 找同 rdev 者。实测在 pty 里能正确得到 /dev/ttys020。
+  拿不到就返回 null（协议允许）。US-005 的 detectTerminal 会吃这个 tty。
+- **settings.json 结构以本机真实文件为准**（只读 require 观察，未修改）：
+  `hooks.<Event>` 是数组，元素形如 `{matcher?, hooks:[{type:'command', command}]}`。
+- **安装器也走原子 tmp+rename**：半截 settings.json 会让 Claude Code 起不来，
+  这是用户配置，比状态文件更输不起。
+- **损坏 settings.json 时 install 抛错而不是当空文件覆盖**：覆盖=不可逆数据丢失。
+  测试断言抛错后用户原内容逐字节不变。
+
+### 本轮测试实际抓到的缺陷（不是事后补的测试）
+
+`isOurs()` 初版写成「带 MARKER 字段 **或** command 匹配」就算自己的条目。
+「uninstall 不误伤别的插件挂在同事件的条目」这条用例直接判红：install 给任何
+command 都会写上同一个 MARKER，于是卸载会把别人的条目一并删掉。
+**修法**：条目身份**只认 command**，MARKER 降级为纯人类可读标注。
+沉淀：标记字段是给人看的，不能当身份判据 —— 身份必须是那个唯一且有语义的值。
+
+### 三条红线核对
+
+- 插件形态：新增代码只 require `fs`/`os`/`path`/`tty`/`child_process(仅测试)`；
+  用途限于状态目录读写 + 接入时改 settings.json，都在 README 权限披露表内。
+  无 eval/new Function/动态拼接 require/自更新。**不采集会话正文** ——
+  测试专门断言 prompt 内容（"修个 bug"）不出现在落盘 JSON 里，且协议外字段为零。PASS
+- 设计：本 story 无 UI 产出，不适用。
+- 协议：映射表七行与 PROTOCOL.md 逐行一致，schema 恒 1，未改协议文件。PASS
+
+### 范围外观察（非 FAIL，留给后续）
+
+- `PermissionRequest`/`SubagentStop`/`StopFailure` 等事件本插件未挂钩（PROTOCOL.md
+  映射表没有它们）。真实会话里 `PermissionRequest` 可能比 `Notification` 更早更准地
+  表示「等待批准」，建议监工冒烟时留意；要加得先改 PROTOCOL.md。
+- hook 的 `command` 用 `process.execPath` 绝对路径拼接。若用户换 Node 版本（nvm 切换后
+  旧路径失效），已装的 hook 会静默失效。面板的 isInstalled 只查 command 是否在配置里，
+  查不出「路径已失效」。US-004 做面板状态时可考虑补一个可执行性探测。
+- 备份是单份覆盖式（`.bak-pet-agent-status`），重复安装会用当前内容刷新备份。
+  语义是「最近一次改动前的样子」，不是历史链。criteria 未要求多份。
+
+<story_completed>US-002</story_completed>
