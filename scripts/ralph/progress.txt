@@ -447,3 +447,145 @@ claude-hook 21 + claude-installer 21 + state-files 20 = **62 全绿**。
   （US-004 做面板状态时可补可执行性探测）。
 
 <story_completed>US-002</story_completed>
+
+## US-002 第 3 轮验证（verify agent，2026-09-10）
+
+**结论：PASS**（判据 = `criteria/US-002.md`，监工 2026-09-10 裁决后落盘的版本）
+
+### 门禁
+- `node --check`：hooks/ lib/ tests/ 共 9 个 JS 全过。
+- `for t in tests/*-test.js; do node "$t"; done` 全绿：
+  claude-hook-test 21 passed / claude-installer-test 21 passed / state-files-test 20 passed，rc 均 0。
+
+### 独立复验（不复用仓内测试，自写 /tmp 脚本，跑完已删）
+按 criteria 逐条另造场景，13 支断言，除一支我自己写错的断言外全绿：
+
+- §2 备份首份不覆盖：install→再 install（换 command）→uninstall 三次动作后，
+  备份仍逐字节等于最初原文；`cp` 回去后 `isInstalled` 转 false（备份的唯一用途可用）；
+  原文件不存在时不造备份。
+- §2 引号安全：把 lib/hooks 拷进 `.../Application Support/吐梨邦 plugins/...` 与
+  `.../o'brien plugins/...`（空格 / 中文 / 单引号三种），取安装写入的 command 整条交
+  `/bin/sh -c` 执行 → 两例均 rc=0、stderr 零字节、写出 `fx-sess-001.json`。
+  （首跑 Q1 报 FAIL 是我断言写错：路径里的单引号在 command 里按 `'\''` 转义，
+  `includes("吐梨邦's plugins")` 必然不匹配。改断言后通过，非实现缺陷。）
+- §3 还原判据：tab 缩进 + 深层嵌套 + 同事件用户条目场景，往返后
+  `deepStrictEqual` + 递归键序均等；`stringify(,,2)+\n` 原文场景保底逐字节相同。
+- §3/§2 身份判据：造「marker 为 true 但 command 指向别处」的条目，uninstall 后该条目
+  仍在 —— 只认 command 落实到位。
+- §1 hook：7 条映射用**自造 payload**（非仓内夹具）复跑，state/lastEvent/project 全对；
+  payload 里塞的 `SECRET-PROMPT` 不出现在落盘 JSON（不采集会话正文）。
+  8 种坏输入 rc=0 且 stdout/stderr **零字节**、不写文件；删掉 `lib/state-files.js` 后
+  hook 仍 rc=0/stderr 空（criteria §1「库文件缺失」明列场景，仓内测试未覆盖，此处补验通过）。
+  pid = ppid；tty 为 null 或 `/dev/ttysNNN`。
+- §4 隔离：真实 `~/.claude/settings.json.bak-pet-agent-status` 不存在、
+  真实 `~/.local/state/pet-agent-status` 不存在。
+
+### 反证（改坏实现看断言是否转红，验断言非恒真）
+| 反证 | 结果 |
+|---|---|
+| A 去掉 `backup()` 的 `existsSync` 短路 | 转红 ✓ |
+| B `isOurs` 改为认 MARKER | 转红 ✓（别人的条目被误删） |
+| C `readSettings` 把损坏 JSON 当空对象 | 转红 ✓（缺预期异常） |
+| D `writeSettings` 单向按 key 排序 | 转红 ✓（键序断言载重） |
+| E `hookCommand` 还原为裸拼路径 | 含空格目录下 rc=1、stderr 712 字节 ✓ |
+
+D 首次探测用「反转键序」，因 install/uninstall 两次写入自相抵消而误显"仍绿"，
+换成幂等的「单向排序」后转红 —— 是探针设计问题，不是断言问题。
+
+### 夹具同源自证已封死
+`seed(content, indent, trailingNewline)` 的 4 空格 / tab / 紧凑单行三种排版，
+实测均 ≠ `JSON.stringify(U,null,2)+'\n'`，且测试内自带 `notStrictEqual` 守卫，
+US-001「夹具形态现实中不存在」的同型复发通道已关闭。
+
+### 三条红线核对
+- 插件形态：hook/installer 只用 fs/os/path/child_process(无)，无 eval、无动态拼接 require
+  （`require(path.join(LIB,...))` 是固定常量拼接，非用户输入）、无自更新、无联网。
+  改 `~/.claude/settings.json` 属 README 权限披露第 2 行已声明用途。✓
+- 设计红线：本 story 无 panel UI 改动，不适用。
+- 协议红线：落盘字段与 PROTOCOL.md schema:1 逐项一致，映射表 7 行全对，
+  未改 PROTOCOL.md。✓
+
+### 范围外观察（不阻塞，留给后续 story）
+1. hook 未做 stdin 大小上限，超大 payload 会全量进内存；实际事件体积小，风险低。
+2. `detectTty` 每次调用会 `readdirSync('/dev')` 全表扫，每事件一次；可缓存（US-003/005 再看）。
+3. 上两轮记的 nvm 换版本致 `execPath` 静默失效仍未解（US-004 面板可补可执行性探测），
+   本轮引号修复不影响该问题。
+
+<verification_passed>US-002</verification_passed>
+
+================================================================================
+## US-002 第 3 轮返工（双轨 codex FAIL / 仲裁 UPHELD 修复）— DONE
+
+判定依据：`scripts/ralph/.codex-acceptance/report-US-002.md`
+（prd.json 的 verificationNotes 写的路径是 `.codex-acceptance/report-US-002.md`，
+实际在 `scripts/ralph/.codex-acceptance/` 下，两者都被 .gitignore 覆盖；
+下轮找不到报告时按后者路径捞，别以为文件丢了）。
+
+### 缺陷（属实，已独立复现）
+
+`isOurs()` 按「分组内某条 command」**认领**，`uninstall`/`install` 却按**整个分组删除**。
+Claude Code 的 `hooks.<Event>[].hooks` 是数组，一组可挂多条命令 —— 用户完全可能把自己的
+命令追加进本插件写出的那个分组（配置里看着就是同一块，手改时最顺手）。此时卸载会把
+用户那条连带抹掉，且毫无提示。
+
+复现（/tmp 脚本，真实读写临时 settings.json，跑完已删）：
+- install 后往 Stop 分组的 `hooks[]` 里追加 `{type:'command',command:'/Users/u/bin/user-notify.sh'}`
+- uninstall
+- 修前：`hooks` 整个变成 `undefined`，用户命令**消失**
+- 修后：`hooks.Stop = [{hooks:[{type:'command',command:'/Users/u/bin/user-notify.sh'}]}]`，用户命令**保住**
+
+### 根因与修法
+
+根因是**删除粒度与身份粒度不一致**：认领看 command，删除看分组。
+修法不是在 uninstall 里打补丁，而是把摘除逻辑单一化：
+- 新增 `stripOurCommand(entry, command)`：只摘分组内我们那一条；分组还剩别的命令就
+  保住该分组并**去掉 MARKER**（这组已不属于本插件，留着会让用户以为整组是插件的）；
+  整组空了才返回 null 由调用方丢弃。
+- 新增 `stripFromList(list, command)`：`install` 的幂等去重与 `uninstall` **共用同一套**
+  摘除逻辑，避免两处粒度将来再次跑偏（原先是两段各写各的 filter）。
+- `install` 的 `added` 计数改用 `removed === 0` 判定，语义比原来的长度比较更直白。
+
+### 测试 21 → 23（补的是原用例覆盖不到的层级）
+
+原「uninstall 不误伤别的插件挂在同事件的条目」只造了**不同分组**共存 —— 与本缺陷
+差一个容器层级，所以 21 条全绿也没拦住。新增两条：
+- `uninstall 只摘本插件那条 command，同一分组内用户追加的命令保留`
+  （兼查：分组存活、MARKER 已摘、removed 仍按 command 粒度计数、独立用户分组不受影响）
+- `重复 install 不重复挂钩，也不吃掉同分组内用户追加的命令`
+  （install 走同一套摘除逻辑，同样要覆盖）
+
+### 反证（判 DONE 的依据，不只看测试变绿）
+
+把 `stripFromList` 退回「整分组删」→ `同一分组内用户追加的命令被连带删除了`
+AssertionError（actual=false / expected=true），确认新断言真载重、非恒真。还原后 23 条全绿。
+
+### 门禁与隔离
+
+`node --check`：git 跟踪的全部 JS 通过。
+claude-hook 21 + claude-installer 23 + state-files 20 = **64 全绿**，退出码均 0。
+真实 `~/.claude/settings.json.bak-pet-agent-status` 不存在、
+真实 `~/.local/state/pet-agent-status` 不存在（前者亦写成测试断言）。
+
+### 三条红线核对
+
+- 插件形态：本轮只增纯函数 `stripOurCommand`/`stripFromList`，无新增 require、
+  无 eval/动态 require/自更新/联网/正文采集。PASS
+- 设计：本 story 无 UI 产出，不适用。
+- 协议：未动 PROTOCOL.md，映射表七行不变，schema 恒 1。PASS
+
+### 判据与知识同步
+
+- `criteria/US-002.md` §2 补入「摘除粒度 = command 粒度」验收项、§4 补入同分组用例硬要求。
+- `knowledge.md` 新增「删除粒度必须等于身份粒度」一节，含可迁移推论：
+  「不同容器共存」的用例**不覆盖**「同容器内兄弟元素共存」，凡「只删自己的」需求两者都要造。
+
+### 范围外观察（非 FAIL，留给后续）
+
+- 前两轮记的仍有效：`PermissionRequest` 可能比 `Notification` 更准；
+  nvm 换 Node 版本后已装 hook 的 `execPath` 会静默失效而 `isInstalled` 查不出来
+  （US-004 面板可补可执行性探测）。
+- `stripOurCommand` 保住分组时会重建对象（按原 key 序拷贝，仅去掉 MARKER），
+  键序不变；但若用户在分组上放了 MARKER **同名**的自有字段会被一并去掉 —— 
+  MARKER 是本插件专有标识，实际不会与用户字段撞名，暂不处理。
+
+<story_completed>US-002</story_completed>

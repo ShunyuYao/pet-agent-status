@@ -38,9 +38,9 @@
       "priority": 2,
       "passes": true,
       "verificationPasses": false,
-      "verificationNotes": "监工裁决（2026-09-10）：FAIL1 备份覆盖=真实缺口，修 backup() 加 existsSync 短路并补断言。FAIL2 逐字节=criteria 过强已澄清（见 criteria/US-002.md 更新）：语义等价+键序保持即可，stringify(,,2) 同风格场景保底逐字节；夹具必须含非 2 空格风格防同源自证。另将范围外观察升格为验收项：hookCommand 路径引号安全（含空格目录下 hook rc=0）。按更新后的 criteria 修复。\n\n返工完成（commit 7c24f5d）：三条全修，criteria/US-002.md 已补建落盘（原 criteria/ 目录整个缺失）。反证逐条做过（移除修复后对应用例转红）。待第 3 轮验证。",
+      "verificationNotes": "双轨 codex FAIL（2026-09-10T10:42:50Z，仲裁=UPHELD）：见 scripts/ralph/.codex-acceptance/report-US-002.md（该目录被 gitignore，报告不在仓内 .codex-acceptance/）。\n\n返工完成：缺陷属实且已独立复现 —— isOurs 按「分组内某条 command」认领却按整个分组删除，用户追加进本插件分组的命令会被连带抹掉。修法：新增 stripOurCommand/stripFromList，摘除粒度统一为 command 粒度，install 幂等去重与 uninstall 共用同一套逻辑；分组还剩用户命令时保住该分组并去掉 MARKER。测试 21→23（补「同一分组内共存」两条，原用例只覆盖了不同分组，差一个容器层级）。反证：退回整分组删 → 新断言转红。门禁：node --check 全过，64 条测试全绿。criteria/US-002.md §2/§4 与 knowledge.md 已同步落盘判据。待第 4 轮验证。",
       "notes": "fixtures 为按官方文档结构预置的样例；监工会用真实会话冒烟并替换为实录 payload。",
-      "reopenCount": 0
+      "reopenCount": 1
     },
     {
       "id": "US-003",

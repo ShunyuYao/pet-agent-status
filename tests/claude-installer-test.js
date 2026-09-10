@@ -269,6 +269,61 @@ test('uninstall 不误伤别的插件挂在同事件的条目', () => {
   }
 });
 
+// ---- 3b. 同一分组内共存：用户把自己的命令追加进本插件写出的那个分组 ----
+// Claude Code 的 `hooks.<Event>[].hooks` 是数组，一组可挂多条命令，用户手改配置时
+// 最顺手的就是往现成的那组里追加。身份判据是「分组内某条 command」，删除粒度就必须
+// 也是那一条 command —— 按分组删会把用户那条连带抹掉且无任何提示（不可逆配置丢失）。
+// 上一版实现正是按分组删，而原「不误伤」用例只造了**不同分组**的场景，漏掉同组共存。
+test('uninstall 只摘本插件那条 command，同一分组内用户追加的命令保留', () => {
+  const userCmd = '/Users/u/bin/user-notify.sh';
+  const file = seed(USER_SETTINGS);
+  installer.install(opts(file));
+
+  // 用户往本插件的 Stop 分组里追加自己的命令
+  const s0 = read(file);
+  const ourStop = s0.hooks.Stop.find((e) => e['pet-agent-status']);
+  ourStop.hooks.push({ type: 'command', command: userCmd });
+  fs.writeFileSync(file, `${JSON.stringify(s0, null, 2)}\n`, 'utf8');
+
+  const res = installer.uninstall(opts(file));
+  const s = read(file);
+
+  // 用户那条必须还在
+  const stopCmds = (s.hooks.Stop || []).flatMap((e) => (e.hooks || []).map((h) => h.command));
+  assert.ok(stopCmds.includes(userCmd), '同一分组内用户追加的命令被连带删除了');
+  // 本插件那条必须摘干净
+  assert.ok(!stopCmds.includes(FAKE_CMD), '本插件条目没摘干净');
+  // 分组还剩用户的命令时不该丢弃整组，也不该留下 MARKER（这组已不属于本插件）
+  const survivor = s.hooks.Stop.find((e) => (e.hooks || []).some((h) => h.command === userCmd));
+  assert.ok(survivor, '保住用户命令的那个分组不见了');
+  assert.ok(!(installer.MARKER in survivor), '分组已不属于本插件，不该继续挂着 marker');
+  // 摘除计数按 command 粒度算，仍是每事件一条
+  assert.strictEqual(res.removed, HOOKED_EVENTS.length);
+  // 原先就独立存在的用户分组也不受影响
+  assert.deepStrictEqual(s.hooks.SubagentStop, USER_SETTINGS.hooks.SubagentStop);
+});
+
+test('重复 install 不重复挂钩，也不吃掉同分组内用户追加的命令', () => {
+  const userCmd = '/Users/u/bin/user-notify.sh';
+  const file = seed(USER_SETTINGS);
+  installer.install(opts(file));
+
+  const s0 = read(file);
+  s0.hooks.SessionStart.find((e) => e['pet-agent-status']).hooks
+    .push({ type: 'command', command: userCmd });
+  fs.writeFileSync(file, `${JSON.stringify(s0, null, 2)}\n`, 'utf8');
+
+  installer.install(opts(file)); // 用户再点一次「一键接入」
+
+  const cmds = read(file).hooks.SessionStart
+    .flatMap((e) => (e.hooks || []).map((h) => h.command));
+  assert.ok(cmds.includes(userCmd), '再次安装吃掉了同分组内用户的命令');
+  assert.strictEqual(
+    cmds.filter((c) => c === FAKE_CMD).length, 1,
+    '本插件条目重复挂了'
+  );
+});
+
 test('settings.json 不存在时 uninstall 不抛、不创建文件', () => {
   const dir = tmp();
   const file = path.join(dir, 'settings.json');
