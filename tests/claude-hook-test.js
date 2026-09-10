@@ -42,6 +42,13 @@ function runFixture(name, dir) {
   return runHook(raw, dir);
 }
 
+// 夹具是监工用真实会话实录回填的，session_id / cwd 会随重录而变。
+// 断言必须从夹具现读，不能把某次录制的字面值抄进测试 —— 抄了就等于把测试
+// 绑死在一份录制上，换一份实录就红，而红的原因与被测行为无关。
+function fixtureOf(name) {
+  return JSON.parse(fs.readFileSync(path.join(FIXTURES, name), 'utf8'));
+}
+
 function readOnly(dir) {
   const files = fs.readdirSync(dir).filter((n) => n.endsWith('.json'));
   assert.strictEqual(files.length, 1, `期望状态目录里只有一个状态文件，实际: ${files.join(',')}`);
@@ -74,14 +81,15 @@ for (const [fixture, event, state] of MAPPING) {
 test('落盘记录字段齐全且符合 PROTOCOL.md schema:1', () => {
   const dir = tmp();
   const before = Date.now();
+  const fx = fixtureOf('user-prompt-submit.json');
   runFixture('user-prompt-submit.json', dir);
   const rec = readOnly(dir);
 
   assert.strictEqual(rec.schema, 1);
   assert.strictEqual(rec.agent, 'claude-code');
-  assert.strictEqual(rec.sessionId, 'fx-sess-001');
-  assert.strictEqual(rec.cwd, '/Users/u/projects/demo');
-  assert.strictEqual(rec.project, 'demo', 'project = basename(cwd)');
+  assert.strictEqual(rec.sessionId, fx.session_id);
+  assert.strictEqual(rec.cwd, fx.cwd);
+  assert.strictEqual(rec.project, path.basename(fx.cwd), 'project = basename(cwd)');
   assert.ok(rec.tty === null || typeof rec.tty === 'string', 'tty 必须是 string|null');
   assert.ok(rec.pid === null || Number.isFinite(rec.pid), 'pid 必须是 number|null');
   assert.strictEqual(rec.source, 'hook');
@@ -111,12 +119,34 @@ test('pid 写的是 Claude Code 进程（父进程），不是 hook 自己', () 
 // ---- 3. 同会话多事件覆盖写同一个文件 ----
 test('同一 session 连续事件覆盖同一个文件（不堆积）', () => {
   const dir = tmp();
+  // 必须真的是同一个 session_id 才在测「覆盖」。夹具里只有 6 份是同一次实录，
+  // notification-permission.json 仍是早期合成样例（那次冒烟没触发权限提示），
+  // 会话不同 —— 直接混用会写出两个文件，红的原因与被测行为无关。
+  // 这里从实录夹具取会话，把中间那步的事件名换成 Notification，保持同会话。
+  const base = fixtureOf('session-start.json');
+  const waiting = Object.assign({}, base, {
+    hook_event_name: 'Notification',
+    message: 'Claude needs your permission to use Bash'
+  });
   runFixture('session-start.json', dir);
-  runFixture('notification-permission.json', dir);
+  runHook(waiting, dir);
   runFixture('stop.json', dir);
-  const rec = readOnly(dir); // readOnly 内断言只有一个 .json
+
+  // 三个事件同属一个 session，所以只该有一个文件（readOnly 内断言只有一个 .json）
+  const rec = readOnly(dir);
+  assert.strictEqual(rec.sessionId, base.session_id);
   assert.strictEqual(rec.state, 'done', '最后一个事件生效');
   assert.strictEqual(rec.lastEvent, 'Stop');
+});
+
+// 夹具漂移守卫：上面这条用例依赖「session-start / stop 属同一次实录」。
+// 将来监工重录夹具时若只换其中一份，这条会先红并直说原因，而不是让上面那条
+// 报一个「文件数 2 != 1」的哑谜。
+test('实录夹具的 session_id 一致（换录制时先看这条）', () => {
+  const recorded = ['session-start.json', 'user-prompt-submit.json', 'pre-tool-use.json',
+    'post-tool-use.json', 'stop.json', 'session-end.json'];
+  const ids = new Set(recorded.map((n) => fixtureOf(n).session_id));
+  assert.strictEqual(ids.size, 1, `实录夹具应同属一个会话，实际有 ${ids.size} 个: ${[...ids].join(', ')}`);
 });
 
 // ---- 4. 绝不阻塞 Claude Code：坏输入一律退出 0 且不写坏文件 ----

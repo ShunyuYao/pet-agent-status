@@ -78,6 +78,12 @@ function assertSemanticRestore(file, originalText, label) {
 }
 
 const FAKE_CMD = '/opt/node /plugins/pet-agent-status/hooks/claude-status-hook.js';
+
+// 闭环用例喂的是实录夹具，落盘文件名由夹具的 session_id 决定，会随重录而变。
+// 从夹具现读，别把某次录制的字面值抄进断言。
+const SESSION_START_FIXTURE = path.join(ROOT, 'fixtures', 'claude-code-events', 'session-start.json');
+const EXPECTED_STATE_FILE =
+  `${JSON.parse(fs.readFileSync(SESSION_START_FIXTURE, 'utf8')).session_id}.json`;
 const opts = (file) => ({ settingsFile: file, command: FAKE_CMD });
 
 // ---- 1. 安装：挂全事件、保留用户条目、写备份 ----
@@ -249,6 +255,60 @@ test('用户完全没有 hooks 时，装了再卸能回到没有 hooks 键的状
   assert.ok(!('hooks' in read(file)), 'hooks 整个空了就该删掉，不留空壳');
 });
 
+// ---- 3c. 删键粒度：只删本插件创建的键，用户原有的键（含空数组）一律保留 ----
+// 上一版按「摘除后为空就删 key」判定，与「是谁创建的」无关 —— 用户原有的
+// `PreCompact: []`（占位/临时注释掉钩子时很常见）会被静默删掉。空数组不是垃圾，
+// 是用户的配置内容；本插件只有权收回自己创建的键。
+test('用户原有的空事件键（PreCompact: []）装卸后仍在且仍为空数组', () => {
+  const withEmptyKey = {
+    model: 'opus',
+    hooks: {
+      PreCompact: [],                 // 用户原有的空数组键，本插件完全不碰
+      Stop: [{ hooks: [{ type: 'command', command: '/Users/u/bin/my-notify.sh' }] }]
+    }
+  };
+  const file = seed(withEmptyKey);
+  const original = fs.readFileSync(file, 'utf8');
+  installer.install(opts(file));
+  installer.uninstall(opts(file));
+
+  // 全对象等价：不只查 PreCompact 在不在，整份配置都必须还原
+  assert.deepStrictEqual(read(file), withEmptyKey, '用户原有的空事件键被删掉了');
+  assert.deepStrictEqual(read(file).hooks.PreCompact, [], 'PreCompact 应仍为空数组');
+  assertSemanticRestore(file, original, '含用户空事件键');
+});
+
+test('本插件创建的事件键卸载后彻底消失（不留空壳）', () => {
+  const file = seed(USER_SETTINGS);
+  installer.install(opts(file));
+  installer.uninstall(opts(file));
+  const s = read(file);
+  // SessionStart 等键在原文里不存在，是 install 创建的 —— 必须收回
+  for (const event of HOOKED_EVENTS) {
+    if (event in USER_SETTINGS.hooks) continue;
+    assert.ok(!(event in s.hooks), `本插件创建的事件键 ${event} 卸载后仍残留`);
+  }
+  // 用户原有的键一个不少
+  assert.deepStrictEqual(Object.keys(s.hooks), Object.keys(USER_SETTINGS.hooks));
+});
+
+test('用户原有的空 hooks 对象装卸后仍在（容器层同理，不是只有事件键要保）', () => {
+  const withEmptyHooks = { model: 'opus', hooks: {} };
+  const file = seed(withEmptyHooks);
+  installer.install(opts(file));
+  installer.uninstall(opts(file));
+  assert.deepStrictEqual(read(file), withEmptyHooks, '用户原有的空 hooks 对象被删掉了');
+});
+
+test('用户原有的空事件键正是本插件要挂的事件时，卸载后该键仍在且为空数组', () => {
+  // 边界：用户把 Stop 留成空数组占位，本插件恰好也要挂 Stop。
+  // 键是用户的，本插件只是往里加了条目 —— 卸载后键必须还给用户，不能收回。
+  const file = seed({ model: 'opus', hooks: { Stop: [] } });
+  installer.install(opts(file));
+  installer.uninstall(opts(file));
+  assert.deepStrictEqual(read(file), { model: 'opus', hooks: { Stop: [] } });
+});
+
 test('uninstall 不误伤别的插件挂在同事件的条目', () => {
   const otherCmd = '/opt/node /plugins/other-plugin/hook.js';
   const file = seed(USER_SETTINGS);
@@ -368,7 +428,7 @@ test('安装写入的 command 原样执行可产出状态文件（闭环自证�
   });
   assert.strictEqual(res.status, 0);
   const files = fs.readdirSync(stateDir).filter((n) => n.endsWith('.json'));
-  assert.deepStrictEqual(files, ['fx-sess-001.json']);
+  assert.deepStrictEqual(files, [EXPECTED_STATE_FILE]);
   assert.strictEqual(JSON.parse(fs.readFileSync(path.join(stateDir, files[0]), 'utf8')).state, 'running');
 });
 
@@ -400,7 +460,7 @@ test('插件目录含空格时，安装写入的 command 经 shell 执行仍 rc=
   });
   assert.strictEqual(res.status, 0, `含空格路径下 hook 退出码非 0：${res.stderr}`);
   assert.strictEqual(res.stderr, '', `hook 不该向 stderr 吐东西：${res.stderr}`);
-  assert.deepStrictEqual(fs.readdirSync(stateDir).filter((n) => n.endsWith('.json')), ['fx-sess-001.json']);
+  assert.deepStrictEqual(fs.readdirSync(stateDir).filter((n) => n.endsWith('.json')), [EXPECTED_STATE_FILE]);
 });
 
 test('hookCommand 生成的两段路径都被引号包裹', () => {
