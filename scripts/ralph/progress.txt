@@ -794,3 +794,88 @@ claude-hook 22 + claude-installer 27 + state-files 20 = **69 全绿**，退出�
   用户自有字段与之撞名时会被误去，实际不会发生，暂不处理。
 
 <story_completed>US-002</story_completed>
+
+## [verify] US-002 Claude Code hooks 一键接入 —— PASS（裁决2 返工后的验证轮）
+
+独立验证 agent，只读产品代码；不起 Electron、无 CDP（RALPH_SKIP_APP=1 常态）。
+判据取 `prd.json.criteriaFile` 指向的根目录 `criteria/US-002.md`（该文件自述为准）。
+
+### 门禁（可观测证据）
+
+- `node --check`：`hooks/*.js`、`lib/*.js`、`tests/*.js` 全部通过，无一条输出。
+- `for t in tests/*-test.js; do node "$t"; done`：
+  claude-hook 22 + claude-installer 27 + state-files 20 = **69 全绿**，退出码均 0。
+
+### 独立复验（不复用实施 agent 的脚本，/tmp 自写两份，跑完已删）
+
+未直调内部逻辑自证的部分一律走真实通道：hook 用 `spawnSync` 喂 stdin，
+安装写出的 command 交 `/bin/sh -c` 整条执行（不自己按空格拆参数）。
+
+| 用例 | 结果 |
+|---|---|
+| A 用户空 `PreCompact:[]` 装卸后**全对象** deepStrictEqual | PASS（裁决2 硬断言①）|
+| B install×3 后 uninstall 完全还原（无空壳） | PASS（裁决2 硬断言②、坑1）|
+| C 用户空 `hooks:{}` 重装后卸载，容器仍在且为 `{}` | PASS（坑2，容器归属显式记录）|
+| D 用户空占位键恰是挂钩事件（`Stop:[]`/`SessionStart:[]`）重装后卸载仍为 `[]` | PASS |
+| E 三轮 install→uninstall 循环后仍完全还原 | PASS |
+| F 同分组内用户追加命令：保住键与分组，MARKER/createdKey/createdHooks 三个标记全清 | PASS |
+| G 伪造 marker+createdKey 但 command 不同的条目不被认领 | PASS（身份只认 command）|
+| H 重复 install 文件逐字节不变（幂等） | PASS |
+| I 多次装卸后备份仍为接入前原文（tab 风格、无末尾换行夹具） | PASS（首份不覆盖）|
+| J 安装写入的 command 经 shell 跑通映射表 7 行；stdout/stderr **零字节**、rc=0 | PASS |
+| K prompt / tool_input / transcript_path 均不落盘 | PASS（不采集正文）|
+| L 损坏配置 install 与 uninstall 均抛错、原文不动、不产生备份 | PASS |
+| N `hooks` 为 `[]`/字符串/数字/null 等非法形态时 install/uninstall 不抛 | PASS |
+| O 同分组共存时 `matcher` 等非 hooks 字段原样保留，兄弟分组不动 | PASS |
+| M 隔离自证：真实 `~/.claude/settings.json.bak-pet-agent-status` 不存在、
+  真实 `~/.local/state/pet-agent-status` 不存在 | PASS |
+
+夹具形态核对：`fixtures/claude-code-events/` 6 份实录同一 session_id
+（`cd948336-…`），`notification-permission.json` 仍是早期合成样例、异会话——
+与 knowledge.md 记录一致。`grep` 确认测试里**无任何实录字面值硬编码**，
+断言均从夹具现读（`fixtureOf(name).session_id`），漂移守卫在位。
+
+### 逐条对照 criteria/US-002.md（Model-Based）
+
+- §1 hook 脚本：映射七行与 PROTOCOL.md 逐行一致；未知事件/缺 session_id/缺 cwd/
+  目录不可写一律 rc=0 且零输出（实测）；`pid` 写 `process.ppid` 并断言 ≠ hook 自身 pid；
+  `tty` 经 fstat rdev 反查、拿不到写 null 不猜；落盘字段为协议白名单闭集。PASS
+- §2 安装器：备份首份不覆盖、幂等、身份只认 command、摘除粒度=command 粒度、
+  删键粒度=创建归属（`createdKey`/`createdHooks` 显式落盘，重装沿用首次判断，
+  `hadFlag` 读上一轮标记而非按当前状态重算）、损坏配置抛错、command 两段均单引号包裹
+  （含空格+中文目录实跑 rc=0、stderr 零字节）。PASS
+- §3 还原判据：2 空格原文往返逐字节相同；4 空格/tab/紧凑单行三种非同源夹具
+  语义等价 + 键序保持（递归 keyOrder 比对）。夹具硬要求已满足。PASS
+- §4 测试：真实通道喂 stdin、无自证；同一分组共存与删键粒度两条硬断言均在位且为
+  全对象 deepStrictEqual；全离线且隔离写成断言。PASS
+- §5 门禁：见上。PASS
+
+### 三条红线核对
+
+- 插件形态：`grep` 全仓 lib/hooks/manifest —— 无 eval / new Function / 自更新 / 联网 /
+  远程资源 / 会话正文采集。hook 内三处 `require(path.join(LIB, ...))` 是对 `__dirname`
+  的静态文件名拼接，非用户输入驱动的动态拼接，不构成红线违反。`child_process` 只出现在
+  测试里（spawn 被测脚本），产品代码 lib/hooks 内零命中。用途全在 README 权限披露表内。PASS
+- 设计：本 story 无 UI 产出，不适用。
+- 协议：未改 PROTOCOL.md；schema 恒 1；`createdKey`/`createdHooks` 两个标记只出现在
+  settings.json 的本插件条目内，**不进状态文件**（K 用例已断言落盘字段为协议闭集）。PASS
+
+### 范围外观察（非 FAIL，留给监工/后续 story）
+
+- **同一插件装两份时，卸载顺序会决定是否留空壳**（本轮新发现，可复现）：
+  A、B 两个副本先后 install，先建键的 A 拿到 `createdKey:true`，B 因「装时键已存在」
+  记为 false。若按 A→B 顺序卸载，B 卸完留下 7 个空数组键；B→A 顺序则完全还原。
+  判为范围外的理由：① criteria 保护的资产是**用户原有**配置，本例残留的键是插件造的，
+  用户内容在任何顺序下都完好；② 该场景需要本插件自身被安装两份（两条条目都带
+  `pet-agent-status` marker），非 criteria 描述的用户场景；③ criteria §4 硬断言②
+  在单插件场景下成立（已实测）。若要根治，方向是把归属记成「谁先建的键」而非布尔，
+  或卸载时检查该键下是否还有本插件系条目——建议监工决定是否值得为此升一条判据。
+- `scripts/ralph/criteria/US-002.md` 与根目录版仍分叉（前几轮已提，仍未处理）。
+  两份对删键边界的要求一致，本轮结论不受影响；仍建议删掉或做软链，
+  避免后续 agent 取到过时判据。
+- 前几轮记录仍有效：`PermissionRequest` 可能比 `Notification` 更准；
+  nvm 换 Node 版本后已装 hook 的 `execPath` 会静默失效而 `isInstalled` 查不出来
+  （US-004 面板可补可执行性探测）；`stripOurCommand` 去掉的三个标记字段若与用户
+  自有字段撞名会被误去（实际不会发生）。
+
+<verification>PASS</verification>
