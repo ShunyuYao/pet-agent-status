@@ -1,0 +1,31 @@
+name: release
+# 按 pet-plugin-registry policy.md：release zip 必须由公开仓 CI 构建，
+# zip 内容与仓库源码一致（审核抽查 diff）。打 v* tag 触发。
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 离线测试门禁
+        run: |
+          npm ci
+          set -e
+          for t in tests/*-test.js; do node "$t"; done
+      - name: 打包运行时文件（只进插件本体，不进测试/文档/CI）
+        run: |
+          mkdir -p out/pet-agent-status
+          cp -r manifest.json tool panel lib hooks assets locales README.md PROTOCOL.md LICENSE out/pet-agent-status/
+          cd out && zip -r -X plugin.zip pet-agent-status
+          shasum -a 256 plugin.zip | tee sha256.txt
+      - name: 发布 Release 并附加产物
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" out/plugin.zip out/sha256.txt \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "$(printf 'CI 构建的插件包。sha256:\n%s' "$(cat out/sha256.txt)")"
