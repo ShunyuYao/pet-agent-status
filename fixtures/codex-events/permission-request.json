@@ -1,0 +1,1 @@
+{"session_id": "01a08ab6-557f-77b3-bc37-3553f712b2e0", "transcript_path": "~/.codex/sessions/2026/09/10/rollout.jsonl", "cwd": "/Users/u/projects/demo", "hook_event_name": "PermissionRequest", "tool_name": "shell", "tool_input": {"command": "git push"}, "_note": "待实录校准：结构按二进制 wire 字段预置"}

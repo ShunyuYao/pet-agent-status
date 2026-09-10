@@ -166,12 +166,47 @@ test('readSnapshots 对不存在的目录返回空快照而非抛', () => {
   assert.strictEqual(snap.unknownCount, 0);
 });
 
-test('readSnapshots 忽略正在写入的 .tmp- 文件', () => {
+test('readSnapshots 忽略正在写入的临时文件（.tmp 后缀，非 .json）', () => {
   const dir = tmp();
-  fs.writeFileSync(path.join(dir, '.tmp-halfway.json'), '{"schema":1,"agen', 'utf8');
+  // 与 writeStatus 真实产出的临时文件同形：.tmp-<id>-<pid>-<rand>.tmp，半截 JSON
+  fs.writeFileSync(path.join(dir, '.tmp-halfway-123-abcdef.tmp'), '{"schema":1,"agen', 'utf8');
   const snap = sf.readSnapshots(dir);
   assert.strictEqual(snap.records.length, 0);
   assert.strictEqual(snap.unknownCount, 0, '临时文件不该被当成损坏数据报警');
+});
+
+// 回归：sessionId 以 .tmp- 开头是协议允许的合法 ID（[A-Za-z0-9._-]），
+// 读侧曾用 startsWith('.tmp-') 过滤临时文件，把这种真会话静默吃掉（records 0 且 unknownCount 0）。
+test('sessionId 以 .tmp- 开头的合法会话能被写入并读回（不被当临时文件吞掉）', () => {
+  const dir = tmp();
+  const { file } = sf.writeStatus({
+    agent: 'claude-code',
+    sessionId: '.tmp-session',
+    cwd: '/Users/me/projects/demo',
+    tty: '/dev/ttys004',
+    pid: 4242,
+    state: 'running',
+    lastEvent: 'SessionStart'
+  }, dir);
+  assert.strictEqual(path.basename(file), '.tmp-session.json', 'sanitizeSessionId 不该改写合法 ID');
+
+  const snap = sf.readSnapshots(dir);
+  assert.strictEqual(snap.records.length, 1, '合法会话必须出现在快照里');
+  assert.strictEqual(snap.records[0].sessionId, '.tmp-session');
+  assert.strictEqual(snap.records[0].state, 'running');
+  assert.strictEqual(snap.unknownCount, 0);
+  assert.strictEqual(sf.readStatus('.tmp-session', dir).lastEvent, 'SessionStart');
+});
+
+// 真临时文件与真会话共存时，前者被滤掉、后者被读到 —— 两条规则互不干扰。
+test('临时文件与 .tmp- 开头的会话同目录共存时各归各位', () => {
+  const dir = tmp();
+  sf.writeStatus({ agent: 'codex', sessionId: '.tmp-real', cwd: '/tmp/x', state: 'waiting', lastEvent: 'Notification' }, dir);
+  fs.writeFileSync(path.join(dir, '.tmp-real-999-zzzzzz.tmp'), '{"schema":1,"age', 'utf8');
+  const snap = sf.readSnapshots(dir);
+  assert.strictEqual(snap.records.length, 1);
+  assert.strictEqual(snap.records[0].sessionId, '.tmp-real');
+  assert.strictEqual(snap.unknownCount, 0);
 });
 
 test('readStatus / removeStatus 按清洗后的 id 命中', () => {
