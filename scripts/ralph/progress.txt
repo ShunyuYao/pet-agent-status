@@ -1,2 +1,26 @@
 # Ralph 运行日志（pet-agent-status）
 
+## US-001 协议库 + 插件骨架 — DONE (commit 06eab72)
+
+产出：manifest.json / lib/state-files.js / lib/i18n.js / locales/{zh-CN,en}.json /
+tests/state-files-test.js。
+
+门禁：node --check 三个 JS 全过；node tests/state-files-test.js 18 条全绿。
+
+关键决策与事实（供后续 story 复用）：
+- manifest 已用宿主真实校验器实跑通过（node -e 直接 require 宿主 loadManifest 校验本仓目录），
+  不是照记忆写的。宿主 KINDS 含 dashboard-card；activation 只接受 'opt-in'；
+  entry.panel.transparent 声明了就必须是 boolean。
+- state-files 的 readSnapshots 返回 { records, unknown[], unknownCount }，不是裸数组。
+  US-003 的 aggregate 直接吃这个结构；unknown 里每项带 reason（unparsable / missing:<字段> /
+  schema-too-new / bad-state ...），schema>1 单独归类 schema-too-new，绝不当 done。
+- writeStatus(input, dir) 的 dir 省略时走 stateDir()，即 PET_AGENT_STATUS_DIR 覆盖，
+  hooks 脚本就该这么用（不要自己拼路径）。
+- buildRecord 缺省补 project=basename(cwd)、tty/pid=null、source='hook'；threadId 只在
+  传了才写（US-006 的 Codex 线程 id 走这条）。
+- i18n 拆成纯函数 createI18n(catalogs, locale) + Node 侧 loadCatalogs()，因为 panel
+  上下文没有 fs——US-004 的 panel 要把词表内联进 HTML 或经 events 拿，不能 require fs。
+- 测试里加了「lib/ 代码零硬编码中文」的扫描（注释豁免、只查字符串字面量），
+  后续 tool/hooks/panel 代码扩这个扫描范围即可。
+
+<story_completed>US-001</story_completed>

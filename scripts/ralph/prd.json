@@ -17,7 +17,7 @@
       ],
       "criteriaFile": "criteria/US-001.md",
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "verificationPasses": false,
       "verificationNotes": "",
       "notes": "PROTOCOL.md 已冻结，实现服从文档；发现文档矛盾停下写进 progress.txt 交监工，不擅自改协议。"
