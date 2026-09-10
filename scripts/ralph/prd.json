@@ -1,0 +1,118 @@
+{
+  "project": "pet-agent-status",
+  "branchName": "main",
+  "description": "agent-status 桌宠插件：Claude Code / Codex CLI 会话状态面板 + 宠物联动 + 跳回终端。三条红线见 AGENTS.md；协议 PROTOCOL.md；设计 DESIGN.md。",
+  "prdSource": "docs/prd.md",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "协议库 + 插件骨架",
+      "description": "作为插件内核，我需要 manifest、状态文件读写库与 locales 骨架，后续故事在其上生长。",
+      "acceptanceCriteria": [
+        "manifest.json 通过宿主 loadManifest 校验（kind [tool,panel]，permissions [storage,pet,ui,events,scheduler]，entry.panel{src:'panel/panel.html',width:320,height:420,title,transparent:false}）",
+        "lib/state-files.js：原子写（tmp+rename）、读目录返回快照数组、损坏/缺必填字段文件跳过不抛、sessionId 非法字符替换为 _",
+        "locales/zh-CN.json 与 en.json 骨架 + lib/i18n.js 取词，代码零硬编码中文",
+        "tests/state-files-test.js 全绿（临时目录夹具，覆盖原子写/损坏容错/路径清洗）",
+        "node --check 全部通过"
+      ],
+      "criteriaFile": "criteria/US-001.md",
+      "priority": 1,
+      "passes": false,
+      "verificationPasses": false,
+      "verificationNotes": "",
+      "notes": "PROTOCOL.md 已冻结，实现服从文档；发现文档矛盾停下写进 progress.txt 交监工，不擅自改协议。"
+    },
+    {
+      "id": "US-002",
+      "title": "Claude Code hooks 一键接入",
+      "description": "作为用户，我一键接入后 Claude Code 每个会话开始产出状态文件；随时可干净卸载。",
+      "acceptanceCriteria": [
+        "hooks/claude-status-hook.js：从 stdin 读官方事件 JSON，按 PROTOCOL.md 映射表写状态文件；未知事件忽略退出 0；任何错误静默退出 0（绝不阻塞 Claude Code）",
+        "lib/claude-hooks-installer.js：merge 写入 PET_AS_CLAUDE_SETTINGS 指向的 settings.json（写前备份 .bak-pet-agent-status；保留用户已有 hooks；幂等；uninstall 只摘除本插件条目）",
+        "tests/claude-hook-test.js：用 fixtures/claude-code-events/*.json 喂 stdin，断言状态文件字段与映射（SessionStart/UserPromptSubmit→running、Notification→waiting、Stop→done、SessionEnd→ended）",
+        "tests/claude-installer-test.js：安装→再安装（幂等）→卸载（用户条目原样保留，逐字节比对）三段全绿",
+        "node --check 全部通过"
+      ],
+      "criteriaFile": "criteria/US-002.md",
+      "priority": 2,
+      "passes": false,
+      "verificationPasses": false,
+      "verificationNotes": "",
+      "notes": "fixtures 为按官方文档结构预置的样例；监工会用真实会话冒烟并替换为实录 payload。"
+    },
+    {
+      "id": "US-003",
+      "title": "tool 采集器状态机与宠物联动",
+      "description": "作为插件内核，我持续读状态目录，推导五态并推送 panel，状态迁移驱动宠物动画/气泡。",
+      "acceptanceCriteria": [
+        "tool/index.js activate(pet)：await pet.scheduler.every(2000, tick) 存 taskId；deactivate 清理",
+        "lib/aggregate.js（now 可注入纯函数）：error 推导（running/waiting 且 ts>60s 且 pid 不存活）、idle（done/ended 或 ts>20min）、unknown（损坏/高 schema）、waiting 恒置顶排序、idle>20min 移除",
+        "状态迁移联动：done→playAnim+bubble，waiting→bubble；同会话同状态 5 分钟节流；pet 对象可注入 mock 断言调用序列",
+        "快照经 pet.events.emit('agent-status:snapshot', rows) 推送，行结构含 panel 渲染所需全部字段（agent/form/project/state/subline/timeText）",
+        "tests/aggregate-test.js 与 tests/tool-lifecycle-test.js 全绿（时间注入不 sleep；pid 存活探测可注入）",
+        "node --check 全部通过"
+      ],
+      "criteriaFile": "criteria/US-003.md",
+      "priority": 3,
+      "passes": false,
+      "verificationPasses": false,
+      "verificationNotes": "",
+      "notes": "宿主动画冲突（睡眠/抓起）本仓库拿不到宿主状态，按『bubble 永发、playAnim 经可配置守卫函数』实现并留 TODO 注释，由宿主内真机验收定参。"
+    },
+    {
+      "id": "US-004",
+      "title": "panel 会话列表与空态 UI",
+      "description": "作为用户，我打开面板能看到全部会话及状态；未接入时看到引导。",
+      "acceptanceCriteria": [
+        "panel/panel.html 单文件（内联 style/script，无外部依赖）按 DESIGN.md 实现：token 色值、行结构（徽标26圆角8+角标13/项目名13/副行11/状态点8/时间11）、waiting 行橙描边置顶、汇总胶囊、底部提示",
+        "厂牌徽标用仓内打包的官方 SVG（assets/claude.svg、assets/openai.svg，Simple Icons 原形），角标 >_ = CLI、窗口形 = App",
+        "空态按 DESIGN.md：图标+文案+『一键接入 Claude Code 钩子』蓝色主按钮+Codex 灰字（US-006 前显『即将支持』，无假入口）；已接入无会话时显『已接入 ✓』+『移除钩子』",
+        "运行中行时间显 mm:ss 计时，完成行显相对时间（N 分前）",
+        "tests/panel-dom-test.js（jsdom + mock window.pet）：喂快照断言行数/排序/颜色 class/文案/空态切换/接入按钮意图事件全绿",
+        "node --check（内联 script 抽出为 panel/panel.js 再内联或用 node --check 可校验的方式组织）通过"
+      ],
+      "criteriaFile": "criteria/US-004.md",
+      "priority": 4,
+      "passes": false,
+      "verificationPasses": false,
+      "verificationNotes": "",
+      "notes": "视觉对照图 docs/design/panel-sessions.png / panel-empty.png；与 DESIGN.md 冲突时以文档+图为准。"
+    },
+    {
+      "id": "US-005",
+      "title": "点击会话行跳回终端",
+      "description": "作为用户，点会话行就切到它所在的 iTerm2 / Terminal.app 窗口标签页；其它终端激活兜底。",
+      "acceptanceCriteria": [
+        "lib/terminal-jump.js：detectTerminal(tty, psTreeProvider) 按进程树反查终端归属（判定只此一处）；buildScript(kind, tty) 生成 iTerm2 / Terminal.app 按 tty 精确聚焦的 AppleScript 文本；兜底 kind 生成 activate 脚本；推断不出返回 null（panel 不显示跳转入口）",
+        "panel 点击行→pet.events 发 agent-status:jump{sessionId}→tool 执行 osascript；失败经快照回推行内错误条（DESIGN.md 行内错误样式），不静默",
+        "tests/terminal-jump-test.js：三支（iTerm2 精确/Terminal.app 精确/兜底激活）各自独立断言生成文本含目标 tty 与正确 app 名；null 支断言无入口",
+        "node --check 全部通过"
+      ],
+      "criteriaFile": "criteria/US-005.md",
+      "priority": 5,
+      "passes": false,
+      "verificationPasses": false,
+      "verificationNotes": "",
+      "notes": "osascript 不在测试里真跑；真实聚焦冒烟由监工在宿主环境做。"
+    },
+    {
+      "id": "US-006",
+      "title": "Codex CLI hooks 接入",
+      "description": "作为 Codex CLI 用户，我的会话与 Claude Code 同列一个面板，联动一致。",
+      "acceptanceCriteria": [
+        "前置门：fixtures/codex-hooks-facts.md 存在（监工本机实测的配置路径/事件名/payload 结构）；不存在则本 story BLOCKED 不开工",
+        "hooks/codex-status-hook.js + lib/codex-hooks-installer.js：按 facts 文件实测事实实现（备份/幂等/卸载标准同 US-002），状态文件 agent:'codex'，有 threadId 则写入",
+        "面板/联动/跳转零改动生效：tests 断言 codex 会话行走同一 aggregate/panel/jump 路径（协议先行验收点）",
+        "tests/codex-hook-test.js 用 facts 附带的实录 payload 夹具全绿",
+        "PROTOCOL.md 的 Codex 映射表按实测补全（本 story 是唯一允许改 PROTOCOL.md 的故事，只增不改已有行）",
+        "node --check 全部通过"
+      ],
+      "criteriaFile": "criteria/US-006.md",
+      "priority": 6,
+      "passes": false,
+      "verificationPasses": false,
+      "verificationNotes": "",
+      "notes": "严禁在没有 facts 文件时按猜测实现（先复现再实现的硬规矩）。"
+    }
+  ]
+}

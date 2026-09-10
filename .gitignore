@@ -1,0 +1,4 @@
+node_modules/
+.DS_Store
+scripts/ralph/progress.txt.bak
+.codex-acceptance/

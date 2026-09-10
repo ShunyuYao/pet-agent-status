@@ -1,0 +1,8 @@
+{
+  "name": "pet-agent-status-dev",
+  "private": true,
+  "description": "dev deps for offline tests (jsdom)",
+  "devDependencies": {
+    "jsdom": "^25.0.0"
+  }
+}
