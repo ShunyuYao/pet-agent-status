@@ -43,15 +43,38 @@ const USER_SETTINGS = {
   }
 };
 
-function seed(content) {
+// 播种夹具。`indent` 可传 4 / '\t' / 0 等，用来造出**与 writeSettings 输出不同源**的排版
+// —— 默认用 2 空格会恰好命中 writeSettings 唯一会输出的那种风格，断言恒真（US-001
+// 「夹具形态现实中不存在」教训的同型复发，criteria/US-002.md §3 已明令封死）。
+function seed(content, indent = 2, trailingNewline = true) {
   const dir = tmp();
   const file = path.join(dir, 'settings.json');
-  if (content !== undefined) fs.writeFileSync(file, `${JSON.stringify(content, null, 2)}\n`, 'utf8');
+  if (content !== undefined) {
+    const body = JSON.stringify(content, null, indent);
+    fs.writeFileSync(file, trailingNewline ? `${body}\n` : body, 'utf8');
+  }
   return file;
 }
 
 function read(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+
+// criteria §3 的「语义等价 + 键序保持」判据。递归比对 key 顺序，
+// 因为 deepStrictEqual 对 {a,b} 与 {b,a} 是相等的，键序得单独查。
+function keyOrder(value) {
+  if (Array.isArray(value)) return value.map(keyOrder);
+  if (value && typeof value === 'object') {
+    return Object.keys(value).map((k) => [k, keyOrder(value[k])]);
+  }
+  return null;
+}
+
+function assertSemanticRestore(file, originalText, label) {
+  const before = JSON.parse(originalText);
+  const after = read(file);
+  assert.deepStrictEqual(after, before, `${label}：语义必须等价`);
+  assert.deepStrictEqual(keyOrder(after), keyOrder(before), `${label}：键序必须保持`);
 }
 
 const FAKE_CMD = '/opt/node /plugins/pet-agent-status/hooks/claude-status-hook.js';
@@ -104,6 +127,28 @@ test('install 写前备份到 .bak-pet-agent-status，内容是改动前原文',
   assert.strictEqual(fs.readFileSync(res.backupFile, 'utf8'), original, '备份必须是改动前的原文');
 });
 
+test('重复 install 不覆盖首份备份（备份恒为接入前原文）', () => {
+  const file = seed(USER_SETTINGS);
+  const original = fs.readFileSync(file, 'utf8');
+  const res = installer.install(opts(file));
+  installer.install(opts(file)); // 用户再点一次「一键接入」
+  assert.strictEqual(
+    fs.readFileSync(res.backupFile, 'utf8'), original,
+    '第二次安装把备份刷成了「已含本插件钩子」的版本，回滚将失效'
+  );
+  // 备份的唯一用途：cp 回去后必须回到「未接入」
+  fs.copyFileSync(res.backupFile, file);
+  assert.strictEqual(installer.isInstalled(opts(file)), false, '用备份回滚后应回到未接入状态');
+});
+
+test('uninstall 也不覆盖首份备份', () => {
+  const file = seed(USER_SETTINGS);
+  const original = fs.readFileSync(file, 'utf8');
+  const res = installer.install(opts(file));
+  installer.uninstall(opts(file));
+  assert.strictEqual(fs.readFileSync(res.backupFile, 'utf8'), original, '卸载不该刷新备份');
+});
+
 test('settings.json 不存在时 install 创建它（连同父目录）', () => {
   const dir = tmp();
   const file = path.join(dir, 'nested', '.claude', 'settings.json');
@@ -139,13 +184,48 @@ test('isInstalled 在安装前后正确反映状态（面板据此显示「已�
   assert.strictEqual(installer.isInstalled(opts(file)), false);
 });
 
-// ---- 3. 卸载：只摘自己，用户配置逐字节还原 ----
-test('uninstall 后 settings.json 与安装前逐字节相同', () => {
-  const file = seed(USER_SETTINGS);
+// ---- 3. 卸载：只摘自己，用户配置还原（判据见 criteria/US-002.md §3）----
+test('uninstall 后逐字节还原（原文为 2 空格风格的保底要求）', () => {
+  const file = seed(USER_SETTINGS, 2);
   const original = fs.readFileSync(file, 'utf8');
   installer.install(opts(file));
   installer.uninstall(opts(file));
-  assert.strictEqual(fs.readFileSync(file, 'utf8'), original, '卸载必须干净还原用户配置');
+  assert.strictEqual(
+    fs.readFileSync(file, 'utf8'), original,
+    '原文即 stringify(,,2)+\\n 风格时，往返必须逐字节相同'
+  );
+});
+
+test('uninstall 后语义等价 + 键序保持（夹具用非 2 空格风格，防同源自证）', () => {
+  // 这三种排版 writeSettings 都不会原样输出，所以断言不再恒真 ——
+  // 它们真正考的是「有没有把用户内容改坏 / 把键序打乱」。
+  for (const [label, indent, nl] of [['4 空格', 4, true], ['tab 缩进', '\t', true], ['紧凑单行', 0, false]]) {
+    const file = seed(USER_SETTINGS, indent, nl);
+    const original = fs.readFileSync(file, 'utf8');
+    // 夹具确实与实现输出不同源，否则这条用例白测
+    assert.notStrictEqual(
+      original, `${JSON.stringify(USER_SETTINGS, null, 2)}\n`,
+      `${label}：夹具必须与 writeSettings 输出风格不同`
+    );
+    installer.install(opts(file));
+    installer.uninstall(opts(file));
+    assertSemanticRestore(file, original, label);
+  }
+});
+
+test('install 不打乱用户原有的键序', () => {
+  const file = seed(USER_SETTINGS, 4);
+  installer.install(opts(file));
+  const s = read(file);
+  // 顶层：用户的四个 key 原序在前，本插件不插队到中间
+  assert.deepStrictEqual(
+    Object.keys(s).filter((k) => k in USER_SETTINGS),
+    Object.keys(USER_SETTINGS),
+    '顶层键序被打乱'
+  );
+  // Stop 事件下用户条目仍排在本插件条目之前
+  const stopCmds = s.hooks.Stop.map((e) => (e.hooks || []).map((h) => h.command).join(','));
+  assert.strictEqual(stopCmds[0], '/Users/u/bin/my-notify.sh', '用户条目必须仍在最前');
 });
 
 test('uninstall 只摘本插件条目，用户在同事件下的条目保留', () => {
@@ -210,7 +290,8 @@ test('settings.json 损坏时 install 抛错而不是覆盖用户内容', () => 
 // ---- 5. 真实产出的 command 指向真实存在的 hook 脚本 ----
 test('默认 hookCommand 指向仓内真实存在的 hook 脚本', () => {
   const cmd = installer.hookCommand();
-  const scriptPath = cmd.slice(cmd.indexOf(' ') + 1);
+  // 两段都带单引号，取第二段并剥引号（引号内的 '\'' 转义在真实路径里不会出现）
+  const scriptPath = cmd.slice(cmd.indexOf("' '") + 3, -1);
   assert.ok(fs.existsSync(scriptPath), `hook 脚本不存在: ${scriptPath}`);
   assert.strictEqual(path.basename(scriptPath), 'claude-status-hook.js');
 });
@@ -221,12 +302,11 @@ test('安装写入的 command 原样执行可产出状态文件（闭环自证�
   installer.install({ settingsFile: file });
   const entry = read(file).hooks.SessionStart.find((e) => e['pet-agent-status']);
   const cmd = entry.hooks[0].command;
-  const sep = cmd.indexOf(' ');
-  const [bin, script] = [cmd.slice(0, sep), cmd.slice(sep + 1)];
 
   const stateDir = tmp();
   const payload = fs.readFileSync(path.join(ROOT, 'fixtures', 'claude-code-events', 'session-start.json'), 'utf8');
-  const res = spawnSync(bin, [script], {
+  // 像 Claude Code 那样整条丢给 shell，而不是自己按空格拆 —— 拆法会掩盖引号缺陷
+  const res = spawnSync('/bin/sh', ['-c', cmd], {
     input: payload,
     encoding: 'utf8',
     env: Object.assign({}, process.env, { PET_AGENT_STATUS_DIR: stateDir })
@@ -235,6 +315,42 @@ test('安装写入的 command 原样执行可产出状态文件（闭环自证�
   const files = fs.readdirSync(stateDir).filter((n) => n.endsWith('.json'));
   assert.deepStrictEqual(files, ['fx-sess-001.json']);
   assert.strictEqual(JSON.parse(fs.readFileSync(path.join(stateDir, files[0]), 'utf8')).state, 'running');
+});
+
+// ---- 6b. 引号安全：含空格的插件目录下，command 经 shell 执行必须 rc=0 ----
+// 宿主插件落地在 `~/Library/Application Support/吐梨邦/plugins/` 之下（含空格），
+// 裸拼路径会被 shell 切成两个参数 → MODULE_NOT_FOUND 堆栈吐到 stderr，打扰会话。
+test('插件目录含空格时，安装写入的 command 经 shell 执行仍 rc=0 并写出状态文件', () => {
+  // 把仓库真实拷进一个含空格（且含中文）的目录，再从那份副本取 installer
+  const base = path.join(tmp(), 'Application Support', '吐梨邦 plugins', 'pet-agent-status');
+  fs.mkdirSync(base, { recursive: true });
+  for (const sub of ['lib', 'hooks', 'fixtures']) {
+    fs.cpSync(path.join(ROOT, sub), path.join(base, sub), { recursive: true });
+  }
+  const copied = require(path.join(base, 'lib', 'claude-hooks-installer.js'));
+
+  const file = seed(USER_SETTINGS);
+  copied.install({ settingsFile: file });
+  const entry = read(file).hooks.SessionStart.find((e) => e['pet-agent-status']);
+  const cmd = entry.hooks[0].command;
+  assert.ok(cmd.includes('吐梨邦 plugins'), '夹具没走到含空格路径，本用例白测');
+
+  const stateDir = tmp();
+  const payload = fs.readFileSync(path.join(ROOT, 'fixtures', 'claude-code-events', 'session-start.json'), 'utf8');
+  // 关键：像 Claude Code 那样把整条 command 交给 shell，而不是自己拆参数
+  const res = spawnSync('/bin/sh', ['-c', cmd], {
+    input: payload,
+    encoding: 'utf8',
+    env: Object.assign({}, process.env, { PET_AGENT_STATUS_DIR: stateDir })
+  });
+  assert.strictEqual(res.status, 0, `含空格路径下 hook 退出码非 0：${res.stderr}`);
+  assert.strictEqual(res.stderr, '', `hook 不该向 stderr 吐东西：${res.stderr}`);
+  assert.deepStrictEqual(fs.readdirSync(stateDir).filter((n) => n.endsWith('.json')), ['fx-sess-001.json']);
+});
+
+test('hookCommand 生成的两段路径都被引号包裹', () => {
+  const cmd = installer.hookCommand();
+  assert.ok(/^'.*' '.*'$/s.test(cmd), `command 未加引号: ${cmd}`);
 });
 
 // ---- 7. 隔离自证 ----
