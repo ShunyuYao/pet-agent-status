@@ -30,10 +30,18 @@
 - Claude Code hooks 官方事件：SessionStart / UserPromptSubmit / PreToolUse / PostToolUse /
   Notification / Stop / SessionEnd（stdin 收 JSON，含 session_id/cwd 等字段）。映射表在
   PROTOCOL.md，hook 侧只写 running/waiting/done/ended 四种，推导态归采集器。
-- Codex CLI 的 hooks 机制**待监工本机实测**（`fixtures/codex-hooks-facts.md`）；该文件不存在时
-  US-006 不许开工（防照猫画虎写出对不上真实事件名的实现）。
-  > 2026-09-10 更新：该文件与 `fixtures/codex-events/*.json` 实录夹具已由监工提供
-  > （Codex CLI 0.153.4，commit abb7290），US-006 前置门**已解锁**。
+- Codex CLI hooks（`fixtures/codex-hooks-facts.md`，Codex CLI 0.153.4 监工实测；US-006 已落地）：
+  配置在 `$CODEX_HOME/hooks.json`（缺省 `~/.codex/hooks.json`，测试用 `PET_AS_CODEX_HOOKS` 覆盖），
+  hooks 段与 Claude `settings.json` **结构同构**（故两个 installer 共用
+  `lib/hooks-installer-core.js`）。事件名与 Claude 大面积重合，**唯独等待态是
+  `PermissionRequest` 而非 `Notification`** —— 顺手把 Claude 的事件名抄进来，就是给 Codex
+  编了个它不会发的事件。映射表唯一实现处是 `lib/codex-events.js`。
+- Codex 侧两条不许犯的：**绝不写 `hooks.state`**（那是 Codex 的信任机制，插件替用户点头
+  等于绕过安全设计；改由面板提示用户下次启动时 Trust）；**语义只有二进制确认、未实录的事件**
+  （PreCompact/PostCompact/SubagentStart/SubagentStop/Interrupt）一律走未知事件忽略，
+  不猜映射 —— `Interrupt` 猜成 done 就是对用户误报「差事办完啦」，比不显示坏得多。
+  `PermissionRequest` 夹具目前仍按 Claude Notification 结构预置（facts 标「待实录校准」），
+  真实 payload 回填后要复跑 `tests/codex-hook-test.js` 那条用例。
 
 ## 状态文件命名铁律（US-001 返工换来的，别再踩）
 
@@ -172,6 +180,16 @@ rejection，在汇总行之后才炸** —— 屏幕先打「48 passed」再打�
 **要验「A 不该覆盖 B」，必须让动作发生在 A 与 B 确实不同的那一刻**；
 序列末尾状态与初始状态相同的用例，天然不具备区分能力。
 
+补充（US-006 独立验证轮换来的第二层）：**「改坏动作真落地了」还不够，它还必须落在
+被测不变量的失效方向上**。验证 agent 先把创建归属判定改成**恒真**，结果 Claude 侧红、
+Codex 侧绿，差点写成「Codex 侧没覆盖这条不变量」的结论 —— 实际是恒真只**放宽**了回收
+范围，而该用例里每个 key 本就是插件造的，放宽不改变结果。换成恒 **false**（即真正的
+失效形态「收不回自己造的东西」）后两侧双双转红，洞才照出来。
+
+选 mutation 的判据：先问「这条不变量被破坏时，生产上会怎么错？」，照那个方向改。
+沿着「更宽松/更严格」随手翻一个方向，有一半概率得到不具区分能力的探针，
+而它的绿会被误读成覆盖缺口。
+
 ## 断言的前提自己要先成立（US-006 换来的）
 
 hook 在管道里跑时 `tty` 必为 null（协议明写「拿不到为 null」），
@@ -198,3 +216,8 @@ DESIGN.md 写「US-006 落地前显示『即将支持』灰字，禁止假入口
 功能有了却不给入口，同样是假入口（用户看到「即将支持」会以为没做）。
 可迁移推论：**带「某 story 落地前/后」条件的验收项，是一份到期要改的契约**，
 后续 story 实施时要主动去翻它，别看到红了就以为自己写坏了。
+
+翻面的连带清理（验证轮观察）：占位文案在**两处**登记 —— `locales/*.json` 与 panel 内联
+词表，翻面只改渲染路径的话，`empty.codexComingSoon` 这类词条会变成两边都还在、
+但无任何渲染路径引用的死词条。不构成假入口（面板上不会显示），但下次有人搜到它
+会以为入口还是灰字。改文案驱动的 UI 时，**渲染路径与两处词表一起过一遍**。
