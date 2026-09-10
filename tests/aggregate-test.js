@@ -248,7 +248,7 @@ test('summary 计数与行一致', () => {
     rec({ sessionId: 'w1', state: 'waiting', lastEvent: 'Notification', ts: T0 })
   ]);
   const { summary } = run(snap);
-  assert.deepStrictEqual(summary, { running: 2, waiting: 1, total: 3, unknown: 0 });
+  assert.deepStrictEqual(summary, { running: 2, waiting: 1, total: 3, unknown: 0, focus: { sessionId: 'w1', state: 'waiting', project: 'demo' } });
 });
 
 test('空目录 → 空行与零计数（面板据此进空态）', () => {
@@ -334,7 +334,7 @@ test('同 (sessionId,state) 5 分钟内最多一次；过窗后可再提醒', ()
   assert.strictEqual(THROTTLE_MS, 5 * MIN);
 });
 
-test('节流按会话隔离：另一个会话同时 done 照样提醒', () => {
+test('节流按会话隔离，但同批多 done 合并成一条（不轮流打扰）', () => {
   const link = createPetLink();
   const m = mockPet();
   link.onSnapshot([row({ sessionId: 'a', state: 'running' }), row({ sessionId: 'b', state: 'running' })], m, { now: T0, t });
@@ -343,10 +343,12 @@ test('节流按会话隔离：另一个会话同时 done 照样提醒', () => {
     row({ sessionId: 'b', state: 'done', project: 'beta' })
   ], m, { now: T0 + 2000, t });
   const bubbles = m.calls.filter((c) => c[0] === 'bubble').map((c) => c[1]);
-  assert.deepStrictEqual(bubbles, [
-    t('bubble.done', { project: 'alpha' }),
-    t('bubble.done', { project: 'beta' })
-  ]);
+  assert.deepStrictEqual(bubbles, [t('bubble.multiDone', { n: 2 })], '两个 done 同批只出一条合并气泡');
+  // 节流仍按会话隔离：稍后第三个会话 done 照样能提醒（没被合并波及）
+  link.onSnapshot([row({ sessionId: 'c', state: 'running', project: 'gamma' })], m, { now: T0 + 3000, t });
+  link.onSnapshot([row({ sessionId: 'c', state: 'done', project: 'gamma' })], m, { now: T0 + 4000, t });
+  const later = m.calls.filter((c) => c[0] === 'bubble').map((c) => c[1]);
+  assert.strictEqual(later[later.length - 1], t('bubble.done', { project: 'gamma' }));
 });
 
 test('首见即 done 的历史会话不提醒（不报旧闻），首见 waiting 要提醒', () => {
@@ -489,3 +491,66 @@ test('测试全程未触碰真实状态目录', () => {
 
 for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
 console.log(`\n${passed} passed`);
+
+// ---- 6. 聚焦会话（对齐 Codex Pets following 语义的 CLI 版）----
+
+test('focus 选择：waiting > running > error > done，同级取最新；每行都带布尔 focused', () => {
+  const dir = tmp();
+  const snap = seed(dir, [
+    rec({ sessionId: 'r-new', state: 'running', ts: T0 - 1000 }),
+    rec({ sessionId: 'w-old', state: 'waiting', lastEvent: 'Notification', ts: T0 - 10 * MIN }),
+    rec({ sessionId: 'w-new', state: 'waiting', lastEvent: 'Notification', ts: T0 - 9 * MIN }),
+    rec({ sessionId: 'd', state: 'done', lastEvent: 'Stop', ts: T0 - 1000 })
+  ]);
+  const { rows, summary } = run(snap);
+  assert.deepStrictEqual(summary.focus, { sessionId: 'w-new', state: 'waiting', project: 'demo' });
+  for (const r of rows) assert.strictEqual(typeof r.focused, 'boolean', '每行都要有布尔 focused');
+  assert.deepStrictEqual(rows.filter((r) => r.focused).map((r) => r.sessionId), ['w-new']);
+});
+
+test('focus 无 waiting 时落到最新 running；全 idle 时也有 focus（不为 null 除非零行）', () => {
+  const dir = tmp();
+  const snap = seed(dir, [
+    rec({ sessionId: 'r-old', state: 'running', ts: T0 - 5 * MIN }),
+    rec({ sessionId: 'r-new', state: 'running', ts: T0 - 1000 })
+  ]);
+  assert.strictEqual(run(snap).summary.focus.sessionId, 'r-new');
+  assert.strictEqual(run(sf.readSnapshots(tmp())).summary.focus, null, '零行时 focus 为 null');
+});
+
+// ---- 7. 联动同批合并（多会话并发不轮流打扰）----
+
+test('两个 done 同批：playAnim 一次 + 一条合并气泡', () => {
+  const m = mockPet();
+  const link = createPetLink();
+  link.onSnapshot([row({ sessionId: 'a', state: DISPLAY.done, raw: 'done', project: 'pa' }),
+                   row({ sessionId: 'b', state: DISPLAY.done, raw: 'done', project: 'pb' })].map((r, i) => ({ ...r, ts: T0 - i })),
+                  m, { now: T0, t });
+  // 首见 done 不提醒——先建立基线
+  assert.deepStrictEqual(m.calls, []);
+  const m2 = mockPet();
+  const link2 = createPetLink();
+  link2.onSnapshot([row({ sessionId: 'a', state: 'running', raw: 'running', project: 'pa' }),
+                    row({ sessionId: 'b', state: 'running', raw: 'running', project: 'pb' })], m2, { now: T0, t });
+  const fired = link2.onSnapshot(
+    [row({ sessionId: 'a', state: DISPLAY.done, raw: 'done', project: 'pa' }),
+     row({ sessionId: 'b', state: DISPLAY.done, raw: 'done', project: 'pb' })], m2, { now: T0 + 1000, t });
+  assert.strictEqual(m2.calls.filter((c) => c[0] === 'playAnim').length, 1, '动画只播一次');
+  assert.strictEqual(m2.calls.filter((c) => c[0] === 'bubble').length, 1, '气泡只一条');
+  assert.ok(m2.calls.find((c) => c[0] === 'bubble')[1].includes('2'), '合并文案带数量');
+  assert.strictEqual(fired.find((f) => f.kind === 'bubble').merged, true);
+});
+
+test('waiting + done 同批：waiting 是主角，mixed 文案，动画仍播（有 done）', () => {
+  const m = mockPet();
+  const link = createPetLink();
+  link.onSnapshot([row({ sessionId: 'w', state: 'running', raw: 'running', project: 'pw' }),
+                   row({ sessionId: 'd', state: 'running', raw: 'running', project: 'pd' })], m, { now: T0, t });
+  m.calls.length = 0;
+  link.onSnapshot([row({ sessionId: 'w', state: 'waiting', raw: 'waiting', project: 'pw' }),
+                   row({ sessionId: 'd', state: DISPLAY.done, raw: 'done', project: 'pd' })], m, { now: T0 + 1000, t });
+  const bubbles = m.calls.filter((c) => c[0] === 'bubble');
+  assert.strictEqual(bubbles.length, 1);
+  assert.ok(bubbles[0][1].includes('pw'), 'waiting 的项目名是主角');
+  assert.strictEqual(m.calls.filter((c) => c[0] === 'playAnim').length, 1, '批里有 done，动画照播');
+});

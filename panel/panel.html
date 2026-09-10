@@ -68,6 +68,8 @@ body{
 /* 手型只给真能跳的行：推断不出终端的行不是可点态（US-005 无假入口） */
 .row.can-jump{cursor:pointer}
 .row.is-waiting{background:var(--waiting-bg);border-color:var(--warning)}
+/* 聚焦会话（本体/徽标正关注的那一个）：左缘细白条，弱于 waiting 橙描边，可叠加 */
+.row.is-focus{box-shadow:inset 3px 0 0 rgba(255,255,255,.45)}
 /* 徽标 26×26 圆角 8 + 右下角 13×13 形态角标 */
 .badge{position:relative;flex:0 0 26px;width:26px;height:26px;border-radius:8px;
   display:flex;align-items:center;justify-content:center}
@@ -322,7 +324,7 @@ body{
   function rowEl(row) {
     var el = document.createElement('div');
     // 状态 class 直接取快照的展示态 —— panel 不推导，推导在 lib/aggregate.js
-    el.className = 'row state-' + row.state + (row.state === 'waiting' ? ' is-waiting' : '');
+    el.className = 'row state-' + row.state + (row.state === 'waiting' ? ' is-waiting' : '') + (row.focused ? ' is-focus' : '');
     el.dataset.sessionId = row.sessionId;
     el.dataset.state = row.state;
 

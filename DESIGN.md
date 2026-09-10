@@ -31,6 +31,10 @@
      `>_`（CLI 终端会话）/ 窗口形（Codex App 任务，二期）。
   2. 中列：项目名（白 13）+ 状态副行（11，颜色随状态：running 浅蓝/waiting 橙/done 绿/error 红/idle 灰）。
   3. 右列：状态点 8px + 相对时间（运行中显 `mm:ss` 计时，完成显 `N 分前`）。
+- **聚焦会话标记**（2026-09-10 增补，对齐 Codex Pets「following」）：快照 `summary.focus` 指向注意力
+  优先级最高的一行（waiting > running > error > done，同级取最新；每行带布尔 `focused`），该行左缘
+  3px 白色 45% 细条（可与 waiting 橙描边叠加）；宠物本体联动同批合并时以它为主角，二期折叠徽标
+  与 US-8 的 App following 都消费这个字段。
 - **排序规则**：waiting 恒排最前（多条 waiting 按 ts 降序），其余按 ts 降序；idle 超 20 分钟移除。
 - 底部提示（灰 10.5）：「点击会话跳回终端 · 完成时宠物会提醒你」。
 - 点击行 = 跳回终端（US-005）；跳转失败在该行下方显示行内错误条（Danger 红文字），不弹窗不静默。
@@ -47,6 +51,9 @@
 - done → `pet.playAnim`（收到消息动画）+ `pet.bubble('✅ <project> 的差事办完啦～')`。
 - waiting → `pet.bubble('✋ <project> 在等你批准')`（橙语气，文案走 locale）。
 - 节流：同会话同状态 5 分钟内最多提醒一次；勿扰/宿主动画冲突时降级为仅面板更新（US-003）。
+- **同批合并（不轮流打扰）**：一轮 tick 内多个迁移只播一次动画、一条气泡——有 waiting 时它是主角
+  （`bubble.mixed`：「✋ {project} 在等你批准 · 另有 {rest} 件新动静」），否则合并为
+  `bubble.multiDone`（「✅ {n} 个差事都办完啦～」）；单迁移行为不变。
 
 ## 状态图例
 

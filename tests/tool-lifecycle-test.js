@@ -207,7 +207,7 @@ function collectorOn(dir, over) {
     }
     assert.strictEqual(data.rows[0].project, 'alpha');
     assert.strictEqual(data.rows[0].state, 'running');
-    assert.deepStrictEqual(data.summary, { running: 1, waiting: 0, total: 1, unknown: 0 });
+    assert.deepStrictEqual(data.summary, { running: 1, waiting: 0, total: 1, unknown: 0, focus: { sessionId: 'a', state: 'running', project: 'alpha' } });
   });
 
   await test('全链路：hook 落盘 done → 下一轮 tick 宠物提醒', async () => {

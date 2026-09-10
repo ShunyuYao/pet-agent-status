@@ -658,3 +658,16 @@ pending.then(() => {
   }
   console.log(`\n${passed} passed`);
 });
+
+test('focus 行渲染 is-focus 标记（且只有一行）', () => {
+  const dir = tmp();
+  sf.writeStatus(rec({ sessionId: 'w', state: 'waiting', ts: T0 }), dir);
+  sf.writeStatus(rec({ sessionId: 'r', state: 'running', ts: T0 }), dir);
+  const snap = agg.aggregate(sf.readSnapshots(dir), { now: T0, isPidAlive: () => true, t });
+  const p2 = mountPanel();
+  p2.push('agent-status:snapshot', snap);
+  const focused = p2.$$('.row.is-focus');
+  assert.strictEqual(focused.length, 1, 'is-focus 有且只有一行');
+  assert.strictEqual(focused[0].dataset.sessionId, 'w', 'focus 应是 waiting 行');
+  p2.close();
+});
