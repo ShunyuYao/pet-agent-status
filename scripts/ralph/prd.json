@@ -77,7 +77,7 @@
       "criteriaFile": "criteria/US-004.md",
       "priority": 4,
       "passes": true,
-      "verificationPasses": false,
+      "verificationPasses": true,
       "verificationNotes": "",
       "notes": "视觉对照图 docs/design/panel-sessions.png / panel-empty.png；与 DESIGN.md 冲突时以文档+图为准。"
     },
@@ -93,7 +93,7 @@
       ],
       "criteriaFile": "criteria/US-005.md",
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "verificationPasses": false,
       "verificationNotes": "",
       "notes": "osascript 不在测试里真跑；真实聚焦冒烟由监工在宿主环境做。"

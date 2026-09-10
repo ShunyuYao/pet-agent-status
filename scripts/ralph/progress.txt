@@ -1346,3 +1346,184 @@ tests/panel-dom-test.js（26 条）；顺带改 tool/index.js 与 tests/tool-lif
    底部提示会被挤出视野 —— 真机上是否要加滚动请监工定。
 
 <story_completed>US-004</story_completed>
+
+## [verify] US-004 — panel 会话列表与空态 UI  → PASS
+
+VERIFICATION REPORT - US-004
+node --check:        PASS（内联 script 抠出后真跑 node --check）
+panel DOM 测试:      PASS（tests/panel-dom-test.js 26/26）
+全量门禁:            PASS（6 个测试文件 154/154 全绿）
+设计红线逐项:        PASS（token/尺寸/徽标/文案 i18n）
+无外部依赖:          PASS（grep 零命中，仅 SVG xmlns 命名空间）
+独立复验:            PASS（/tmp 自写 55 条 jsdom 断言，与仓内结论一致，已删）
+Overall: PASS
+
+### 1. Code-Based
+- `node tests/panel-dom-test.js` 退出码 0，26 passed。
+- 全量：aggregate 37 / claude-hook 22 / claude-installer 27 / panel-dom 26 /
+  state-files 20 / tool-lifecycle 22 = 154 条全绿，无预存在失败。
+
+### 2. 独立复验（不复用实施 agent 的夹具与辅助函数）
+自写 /tmp/indep-us004.js：另起 jsdom、自造 5 行快照（waiting 摆中间验证 panel 不改序）、
+自注 mock pet，55 条断言全过，与仓内测试结论一致。交叉验到的关键点：
+- 5 行渲染、waiting 首位且带 `is-waiting`（橙底+橙描边）、其余行无描边；
+- 各行 state class 依次 waiting/running/running/idle/error，panel 未自行排序（序照抄快照）；
+- 汇总胶囊「2 运行中」；running 行 `01:23` 合 mm:ss，done 行「3 分前」相对时间；
+- jumpError 行内错误条为 Danger 色且**紧跟其行之后**（DOM 相邻性，非仅存在性）；
+- 点行发 `agent-status:jump{sessionId:'r1'}`，取的是 mock 实收参数而非常量自比；
+- 空态三要素齐；未接入→蓝主按钮，已接入→「已接入 ✓」+「移除钩子」且主按钮收起；
+- **假入口反证**：Codex 灰字非 button 元素，dispatch click 后 emitted 数组为 0 —— 
+  「没挂 handler」是观测出来的，不是读代码推断的。
+
+### 3. 设计红线逐项（DESIGN.md）
+token 12 项逐个命中：#2A2E39 / #3D7EFF / #8FB5FF / #F2994A / #27AE60 / #EB5757 /
+#9AA0AC / #D97757 / #0D0D0D / rgba(255,255,255,.06) / waiting rgba(242,153,74,.13) /
+codex 描边 rgba(255,255,255,.18)；waiting 描边 1.5px 实测命中。
+尺寸：徽标 26×26 圆角 8、角标 13×13、项目名 13、副行 11、状态点 8、行圆角 12、
+底部提示 10.5、主按钮 12.5 —— 全部对上。
+徽标：assets/claude.svg / assets/openai.svg 均为单 path、viewBox 0 0 24 24 的
+Simple Icons 原形；按 SVG 词法重新切数字后坐标落在 -12.64..24（负值系相对命令位移，正常），
+非字母占位；panel 内联副本与 assets 逐字一致（漂移守卫有效）。
+文案：静态词全走 t()，内联词表与 locales/*.json 逐键无漂移；en 环境走 en 表，
+快照 locale 压过 navigator.language（整块面板单一语言权威）。
+
+### 4. 三条项目红线
+1. 插件形态：panel 内 `require(`/`process.`/`eval(`/`new Function`/动态 import 零命中；
+   只用 `pet.events.on/emit` 与 `pet.ui.closePanel` —— 经宿主 sdk-surface.js 核对，
+   三者均在 **panel 上下文**且为 FROZEN 档（events 是 ALL，ui.closePanel 含 'panel'）。
+   零远程资源（grep 到的两处 http 是 createElementNS 的 SVG 命名空间常量，非资源加载）。
+2. 设计红线：见第 3 节，逐项对上。
+3. 协议红线：panel 不碰状态文件、不解析 schema，只消费 tool 下发的 {rows, summary, locale}
+   —— 与裁决3 追认的载荷契约一致，locale 为附加字段不破坏契约。
+
+### 5. 范围外观察（不构成 FAIL）
+1. `agent-status:jump` 在 tool 侧尚无订阅者，点行目前只发意图不产生跳转 —— 
+   这正是 US-005 的交付内容，criteria §3 也只要求「mock pet.events 收到 jump{sessionId}」，
+   按范围尺子第 2 条归 US-005。
+2. 面板高度 manifest 定死 420、body `overflow:hidden`，会话超约 5 条时底部提示被挤出视野。
+   DESIGN.md 未规定滚动行为，属实施 agent 已记录的待监工裁定项，criteria 未要求，不判 FAIL。
+3. `form` 恒 'cli'，角标只会渲染 `>_`；app 分支已写好但要等协议加 form 字段才生效（US-003 已记）。
+
+================================================================================
+## US-005 点击会话行跳回终端 — DONE (commit df963cd)
+
+产出：lib/terminal-jump.js、tests/terminal-jump-test.js（49 条）；
+改 lib/aggregate.js（行增 canJump/jumpError）、tool/index.js（订阅 jump + 执行 + 回推）、
+panel/panel.html（可点态只认 canJump）、README.md（权限披露补 spawn ps）、
+tests/panel-dom-test.js（US-004 那条 jump 用例按新契约补 canJump 注入）。
+
+门禁：git 跟踪的全部 JS + 新增两文件 `node --check` 通过；
+7 个测试文件 **203 条全绿**（aggregate 37 / claude-hook 22 / claude-installer 27 /
+panel-dom 26 / state-files 20 / **terminal-jump 49** / tool-lifecycle 22），退出码均 0。
+真实 `~/.local/state/pet-agent-status` 全程不存在（写成断言）。
+
+**判据文件位置**：`criteria/US-005.md` **不存在**（根 `criteria/` 目录整个没有了 ——
+US-002 第 4 轮验证报告还引用过它，现在只剩 `scripts/ralph/criteria/`）。
+本轮按 `scripts/ralph/criteria/US-005.md` 逐条实施。prd.json 的 criteriaFile 字段
+仍写着根路径，建议监工统一：要么把根 criteria/ 恢复，要么把 prd.json 的路径改指
+scripts/ralph/criteria/ —— 现在两者对不上，下轮 agent 会照样扑空。
+
+### 关键决策与事实（供后续 story 复用）
+
+- **归属判定怎么做**：`ps -eo pid=,ppid=,tty=,comm=` 取进程表，挑出挂在目标 tty 上的
+  进程，沿 ppid 往上爬到第一个能认出的 App。本机实测真实链路是
+  `Terminal.app → login → -zsh → claude → node`，App 自己不挂 tty（ps 里显示 `??`），
+  所以**只按 tty 找不到 App，必须爬父链**。
+  匹配用 comm 里的 `/Xxx.app/` 路径片段做锚，不用裸进程名（裸名 `Terminal` 太容易误伤）。
+  实测 `ps -o comm=` 在 macOS 上给的是**绝对路径**，且路径里有空格
+  （`/Applications/Visual Studio Code.app/...`）—— parsePsOutput 只切前三列，comm 整行收。
+- **tty 安全用白名单拒绝，不用转义放行**：`/^tty[a-z0-9]+$/i`。tty 名的合法形态本来
+  就极窄，不合规一律返回 null（面板不给入口），比转义后放行少一整类风险面。
+  脚本经 `execFileSync('osascript', ['-e', script])` 传参，不经 shell，本就无 shell 注入面；
+  白名单挡的是 AppleScript 层的字符串逃逸。
+- **canJump 为什么放在快照行里而不是 panel 自己判**：criteria §2 要求判定「只此一处」。
+  panel 再判一次必然与 tool 分叉（点得动却跳不了）。aggregate 也不判，它只接一个注入的
+  `canJump(tty)` 谓词，**缺省 false** —— 拿不到判定就不给入口，好过给一个点了没反应的假入口。
+  测试里有条守卫扫 panel/aggregate/tool 三个文件，出现 `iTerm`/`Terminal.app`/`osascript`/
+  `tell application` 任一字样就红。
+- **ps 缓存 10s**：canJump 是每行每 tick 都要问的，2s 一轮不缓存会 spawn 一堆 ps。
+  终端归属几分钟内不会变，10s 窗口足够。
+- **行内错误条 30s TTL**：跳转失败的红条不能永远挂着 —— 用户在别处修好终端后面板
+  还红着会以为坏了。成功跳转立刻撤销该行错误条。
+- `runJump` 的失败原因分两档：`unavailable`（压根找不到终端，用 `jump.unavailable` 文案）
+  与执行失败（用 `jump.failed{reason}` 带上 osascript 真实报错）。笼统一句「失败」
+  没法让用户判断该干什么。两个 locale key US-001 就预留好了，本轮直接用上。
+
+### 本轮测试自己抓到的两个缺陷
+
+1. **async 用例是假绿的**（测试基建缺陷，但后果很实）：照抄前几个测试文件的同步
+   `test(name, fn)` 壳，async 用例的断言失败会变成**未捕获 rejection 在汇总之后才炸**，
+   屏幕上先打「48 passed」再打堆栈。改成把用例排队后串行 `await` 才现原形。
+   > 可迁移推论：**同步的测试壳不能跑 async 用例**。它不是少测了几条，是把红的显示成绿的 ——
+   > 比没写测试更坏。其余 6 个测试文件目前全是同步用例，暂不受影响，但谁将来往里加
+   > async 用例就会踩到；建议后续 story 顺手把 test 壳统一成 await 版。
+2. **注入点类型对不上**：`tool` 里写的是 `typeof d.psTree === 'function'`，而测试注的是
+   **数组**（terminal-jump 两种都吃）—— 于是注入被静默忽略，端到端用例实际去跑了真实 `ps`。
+   本机恰好真有终端进程，所以部分断言还能歪打正着。改成数组/函数都收。
+   这个缺陷正是被上面那条 async 修复暴露出来的。
+   > 可迁移推论：**注入点要么严格收窄类型并在类型不符时报错，要么两种都收；
+   > 悄悄回落到真实实现是最坏的一档** —— 测试看起来在用夹具，其实在碰真环境。
+
+### 反证（判 DONE 的依据，不只看测试变绿）
+
+在 /tmp 的仓库副本上逐条改坏实现（跑完已删），基线先复现 48/48 全绿：
+
+| 反证 | 结果 |
+|---|---|
+| A 兜底档脚本里塞进 tty（假装精确） | 转红 ✓ 2 条 |
+| B `TTY_RE` 放宽为 `/./`（注入面打开） | 转红 ✓ 2 条 |
+| C panel 无条件挂 click（假入口） | 转红 ✓ 2 条 |
+| D `canJump` 缺省改恒 true | 转红 ✓ 2 条 |
+| E tool 不订阅 `agent-status:jump` | 转红 ✓ 7 条 |
+| F `jumpErrors` 不回推快照 | 转红 ✓ 5 条 |
+| G panel 里出现 `iTerm` 字样（判定散落） | 转红 ✓ 1 条 |
+| H aggregate 里出现 `osascript` 字样 | 转红 ✓ 1 条 |
+| I README 摘掉 `spawn \`ps\`` 那行 | 转红 ✓ 1 条（披露漂移守卫） |
+
+### 「测试没真跑外部命令」是**观测**出来的，不是声明的
+
+criteria §6 把「测试真跑 osascript」列为越界。光在注释里写「不跑」证明不了什么，
+所以用 `node -r` 预加载一个补丁把 `child_process` 的 7 个入口全包一层，
+命中 `ps`/`osascript` 就抛 —— **7 个测试文件全跑一遍，203 条依旧全绿**
+（补丁自身有效性另行反证：直接调 `execFileSync('ps')` 当场抛）。
+
+### 夹具同形性（knowledge.md 记了三次同型复发，本轮专门验）
+
+伪造进程表的形状照抄本机 `ps -eo pid=,ppid=,tty=,comm=` 的真实产出（TTY 列不带
+`/dev` 前缀、comm 是绝对路径）。另做了一次**真机只读冒烟**（不跑 osascript）：
+拿真实 `readPsTree()` 的 730 行进程表喂 `detectTerminal('/dev/ttys000')`，
+返回 `terminal`，`scriptForTty` 生成出带 `/dev/ttys000` 的 Terminal.app 精确脚本 ——
+证明这套判定对真实进程表有效，不只是对我造的 mock 有效。
+
+### 三条红线核对
+
+- **插件形态**：`lib/terminal-jump.js` 只 require `child_process`（用途 = spawn `ps` 与
+  `osascript`，两条都已写进 README 权限披露表，并有守卫断言防漂移）；
+  无 eval / new Function / 动态拼接 require / 联网 / 自更新 / 正文采集。
+  tool 侧未新增任何 `pet.*` 命名空间（tool-lifecycle-test 的 Proxy 守卫仍只放行
+  scheduler/events/pet，本轮照过）。panel 侧零新增依赖。PASS
+- **设计**：DESIGN.md:36「点击行 = 跳回终端；跳转失败在该行下方显示行内错误条
+  （Danger 红文字），不弹窗不静默」—— 错误条紧邻其行（测试断言 DOM 相邻性
+  `row.nextElementSibling === err`，非仅存在性），Danger 色沿用 US-004 已验收的
+  `.jump-error` 样式。`cursor:pointer` 从 `.row` 收窄到 `.row.can-jump`：
+  跳不了的行不摆出可点的样子（同 DESIGN.md 禁假入口的精神）。PASS
+- **协议**：未动 PROTOCOL.md，schema 恒 1。`canJump`/`jumpError` 只活在内存快照里，
+  与 `raw` 同类（US-003 已确立的模式），**不落盘** —— state-files 那 20 条闭集断言照过。PASS
+
+### 范围外观察（非 FAIL，留给后续）
+
+1. **兜底档的 App 清单是手工枚举**（Warp/kitty/Alacritty/WezTerm/Hyper/Ghostty/Tabby/
+   VS Code/Cursor）。用户装了别的终端就落到 null（不给入口），不会误跳，但也享受不到
+   兜底激活。要扩就往 `FALLBACK_APPS` 加一行；同 `HOST_ANIM_STATES`，是快照不是自动同步。
+2. **iTerm2 的 AppleScript app 名写的是 `"iTerm2"`**（iTerm2 官方脚本接口用这个名，
+   与 bundle 名 `iTerm.app` 不同）。这条**没在本机实跑验证过**（criteria 禁止测试跑
+   osascript），建议监工冒烟时重点看这一支 —— 如果 iTerm2 上跳不动，八成是这个名。
+   Terminal.app 那支同理（`tell application "Terminal"`）。
+3. `runJump` 默认执行器给 osascript 5s 超时。真机上 AppleScript 首次授权会弹「自动化」
+   权限对话框，用户没点之前这次跳转会超时并显示行内错误条 —— 文案是 osascript 的原始
+   报错，可能不够好懂。真机冒烟看看要不要给「未授权」单独一档文案。
+4. 前几轮记的仍有效：`form` 恒 'cli'；error 行不受 20min 淡出约束会长期驻留；
+   面板高度定死 420、会话超约 5 条时底部提示被挤出视野（DESIGN.md 未规定滚动行为）；
+   nvm 换 Node 版本后已装 hook 的 `execPath` 会静默失效而 `isInstalled` 查不出来。
+
+<story_completed>US-005</story_completed>
