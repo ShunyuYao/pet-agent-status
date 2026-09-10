@@ -76,7 +76,7 @@
       ],
       "criteriaFile": "criteria/US-004.md",
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "verificationPasses": false,
       "verificationNotes": "",
       "notes": "视觉对照图 docs/design/panel-sessions.png / panel-empty.png；与 DESIGN.md 冲突时以文档+图为准。"

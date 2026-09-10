@@ -1278,3 +1278,71 @@ VERIFICATION REPORT - US-003（tool 采集器状态机与宠物联动）
 
 Overall: PASS
 ================================================================================
+
+## US-004 panel 会话列表与空态 UI — DONE (commit 8991525)
+
+产出：panel/panel.html（单文件，style/script 全内联）、assets/{claude,openai}.svg、
+tests/panel-dom-test.js（26 条）；顺带改 tool/index.js 与 tests/tool-lifecycle-test.js
+（见下「本 story 才暴露的两个缺陷」）。
+
+门禁：lib/ tool/ hooks/ tests/ 全部 .js `node --check` 通过；6 个测试文件全绿
+（37 + 22 + 27 + 26 + 20 + 22 = 154 条）。manifest 再次经宿主真实 loadManifest 加载通过
+（panel/panel.html 这回是真存在的文件了）。
+
+### 关键决策与事实（供后续 story 复用）
+
+- **panel 为什么把 SVG 与词表内联而不是 <img src> / fetch**：panel 以 `file://` 加载
+  （runtime.js#openPanel 用 pathToFileURL），宿主 CSP 是 `img-src 'self' plugin: data:`，
+  而 file:// 页的 origin 在 Electron 里是 opaque，`'self'` 匹配不可靠 —— 一旦被拦徽标就
+  静默空白。词表同理：panel 上下文没有 fs（US-001 已记）。两处内联都是**副本**，
+  所以各配了一条漂移守卫（内联 path vs assets/*.svg 逐字、内联 CATALOGS vs
+  locales/*.json 逐键），漂移即红。
+- **`node --check` 怎么覆盖内联脚本**：测试把 `<script>` 块抠出来写进临时 .js 再真跑
+  `execFileSync(node, ['--check', f])`。这样既守住 AGENTS.md 的单文件要求，
+  又不留一份 panel.js 副本要同步。
+- **panel 零业务计算已落实**：行的顺序、状态 class、副行文案、时间文本全部照抄快照，
+  测试里 `rows.map(sessionId)` 与 `snap.rows.map(sessionId)` 逐项比对 ——
+  panel 自己排序/改判会当场红。
+- panel 用到的 SDK 面只有 `pet.events.{on,emit}` 与 `pet.ui.closePanel`，
+  都在 sdk-surface.js 的 panel 上下文里（scheduler/net 没碰，那两个 panel 根本没有）。
+- 新增事件名（panel↔tool，两侧各一份常量，有漂移守卫）：
+  `agent-status:install-state`（tool→panel，{claude:bool}）、
+  `agent-status:install-claude` / `agent-status:uninstall-claude`（panel→tool，意图）。
+  `agent-status:jump` 已在 panel 侧发出，tool 侧接收留给 US-005。
+
+### 本 story 才暴露的两个缺陷（都已修，各配落地测试）
+
+1. **接入按钮原本是死的**：panel 按 criteria 只发意图，但 tool 侧没有任何人订阅
+   `install-claude`/`uninstall-claude` —— 点了以后 settings.json 纹丝不动，且**静默**
+   （无异常、无提示）。与 US-003 那次「动作名宿主不认」是同一型：接口两端各写各的，
+   单侧测试全绿也证明不了链路通。修法是 tool 订阅意图并真调 US-002 的 installer，
+   测试从意图入口一路断言到临时 settings.json 的真实内容（tool-lifecycle 3 条 +
+   panel-dom 端到端 1 条）。
+   > 可迁移推论：**「发意图」与「接意图」必须有一条测试同时踩到两端**。
+   > 只断言「按钮发出了 X」等于只测了半条线，另半条不存在时表现为静默无反应。
+2. **接入态推送时机**：一开始写在 `start()` 里推一次，但面板是随开随关的 ——
+   在 tool 启动之后才打开的面板永远收不到这条，空态会一直停在「一键接入」，
+   哪怕钩子早装好了。改成随每轮 tick 一起推（读个小 JSON，2s 一次可忽略）。
+   连带影响：tool-lifecycle-test 原来按 `emitted.length` 数快照数，现在一轮推两条事件，
+   改成按事件名筛（`state.snapshots()`）。**按事件名筛本来就是那些断言的真实语义**，
+   数长度只是当时恰好只有一种事件。
+3. **语言双源打架**：tool 侧按 LANG 取副行/时间词随行下发，panel 侧按
+   navigator.language 取标题/空态词 —— 两者不一致时（宿主 LANG=zh_CN 但渲染层报
+   en-US，jsdom 下当场复现）同一块面板上半截英文下半截中文。修法：locale 随快照
+   下发，panel 以 tool 为准并重刷静态文案。契约仍是 {rows, summary}（裁决3），
+   locale 是附加字段。
+   > 可迁移推论：**同一块界面的文案只能有一个语言权威**。两个上下文各自探测环境
+   > 一定会在某台机器上分叉，而且分叉时不报错、只是看起来很怪。
+
+### 范围外观察（不构成本 story 缺陷，供后续参考）
+
+1. `form` 恒 'cli'（US-003 已记），所以角标目前只会渲染 `>_`；App 形态（窗口形 ▭）
+   的渲染分支已写好并有测试覆盖 dataset，但要等协议加 form 字段才会真正出现。
+2. unknown 行的 project 用文件名顶替、ts=0 恒排末尾（US-003 已记），
+   panel 照常渲染成一行灰的「状态未知」，不会误报完成 —— 有用例守着。
+3. error 行不受 20min 淡出约束会长期驻留（US-003 已记），panel 这边照单全收。
+4. 面板高度由 manifest 定死 420，行多了会溢出；DESIGN.md 未规定滚动行为，
+   当前 body 是 `overflow:hidden`（照 320×420 固定面板的写法）。会话数超过约 5 条时
+   底部提示会被挤出视野 —— 真机上是否要加滚动请监工定。
+
+<story_completed>US-004</story_completed>
