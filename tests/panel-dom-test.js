@@ -393,10 +393,11 @@ test('点移除钩子 → 发 agent-status:uninstall-claude 意图', () => {
 });
 
 test('点会话行 → 发 agent-status:jump{sessionId}', () => {
+  // canJump 由 tool 注入（判定在 lib/terminal-jump.js）；能跳的行才是可点态，见 US-005
   const snap = snapshotOf([
     rec({ sessionId: 'aaa', project: 'alpha', ts: T0 }),
     rec({ sessionId: 'bbb', project: 'beta', ts: T0 - 1000 })
-  ]);
+  ], { canJump: () => true });
   const p = mountPanel();
   p.push('agent-status:snapshot', snap);
   p.$('.row[data-session-id="bbb"]').dispatchEvent(new p.dom.window.MouseEvent('click', { bubbles: true }));

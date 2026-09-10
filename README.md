@@ -15,6 +15,7 @@
 |---|---|---|
 | `fs` 读写 `~/.local/state/pet-agent-status/` | 读取会话状态文件（本插件 hooks 自己写入的数据） | 仅该目录 |
 | `fs` 读写 `~/.claude/settings.json`、Codex hooks 配置 | 「一键接入/移除钩子」时合并写入 hooks 条目，写前自动备份 | 仅接入/卸载动作时 |
+| `child_process` spawn `ps` | 按会话的 tty 反查它属于哪个终端 App（决定这一行能否跳转） | 只读进程表，10 秒缓存 |
 | `child_process` spawn `osascript` | 点击会话行时聚焦 iTerm2 / Terminal.app 对应窗口标签页 | 仅跳转动作时 |
 
 **不采集也不上传任何对话内容**；状态文件只含任务标识、目录名、状态与时间戳。

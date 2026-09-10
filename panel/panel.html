@@ -64,8 +64,9 @@ body{
   display:flex;align-items:center;gap:10px;
   padding:9px 10px;border-radius:12px;
   background:var(--row-bg);border:1.5px solid transparent;
-  cursor:pointer;
 }
+/* 手型只给真能跳的行：推断不出终端的行不是可点态（US-005 无假入口） */
+.row.can-jump{cursor:pointer}
 .row.is-waiting{background:var(--waiting-bg);border-color:var(--warning)}
 /* 徽标 26×26 圆角 8 + 右下角 13×13 形态角标 */
 .badge{position:relative;flex:0 0 26px;width:26px;height:26px;border-radius:8px;
@@ -320,7 +321,13 @@ body{
     side.appendChild(time);
     el.appendChild(side);
 
-    el.addEventListener('click', function () { emit(EV_JUMP, { sessionId: row.sessionId }); });
+    // 可点态只认快照带来的 canJump —— 终端归属判定唯一在 lib/terminal-jump.js，
+    // panel 这边再判一次就会两处打架（点得动却跳不了）。
+    // 推断不出终端的行不挂 handler、不显手型：不给点了没反应的假入口（DESIGN.md 同禁假入口）。
+    if (row.canJump) {
+      el.classList.add('can-jump');
+      el.addEventListener('click', function () { emit(EV_JUMP, { sessionId: row.sessionId }); });
+    }
     return el;
   }
 

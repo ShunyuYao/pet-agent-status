@@ -12,6 +12,7 @@ const { aggregate } = require(path.join(LIB, 'aggregate.js'));
 const { createPetLink } = require(path.join(LIB, 'pet-link.js'));
 const { createNodeI18n } = require(path.join(LIB, 'i18n.js'));
 const installer = require(path.join(LIB, 'claude-hooks-installer.js'));
+const terminalJump = require(path.join(LIB, 'terminal-jump.js'));
 
 const TICK_MS = 2000;                            // 宿主把最小间隔钳到 1000ms，2s 满足「3 秒内可感知」
 // 事件名带前缀防撞（AGENTS.md 惯例）。这一组与 panel/panel.html 里的常量是**两份副本**，
@@ -21,6 +22,14 @@ const SNAPSHOT_EVENT = 'agent-status:snapshot';
 const INSTALL_STATE_EVENT = 'agent-status:install-state';   // tool → panel：接入与否
 const INSTALL_CLAUDE_EVENT = 'agent-status:install-claude';   // panel → tool：接入意图
 const UNINSTALL_CLAUDE_EVENT = 'agent-status:uninstall-claude'; // panel → tool：移除意图
+const JUMP_EVENT = 'agent-status:jump';                         // panel → tool：跳回终端意图
+
+// 跳转失败的错误条挂多久。留到下一次跳转成功/超时为止，不能永远挂着 ——
+// 用户在别处修好终端后面板还红着，会以为坏了。
+const JUMP_ERROR_TTL_MS = 30 * 1000;
+// 进程表（ps）缓存窗口。canJump 是每行每 tick 都要问的，而终端归属几分钟内不会变；
+// 不缓存的话 2s 一轮 × N 行会 spawn 一堆 ps。
+const PS_CACHE_MS = 10 * 1000;
 
 // 进程存活探测：kill(pid, 0) 不发信号只查存在性。EPERM = 存在但不属于本用户，算存活。
 function isPidAlive(pid) {
@@ -50,12 +59,80 @@ function createCollector(deps) {
   let taskId = null;
   let lastSnapshot = { rows: [], summary: { running: 0, waiting: 0, total: 0, unknown: 0 } };
 
+  // ---- 跳转（US-005）----
+  // psTree/runner 可注入：测试绝不 spawn ps、更不真跑 osascript（会骚扰真实桌面）。
+  // 数组或函数都收（terminal-jump 两种都吃）：测试注数组最省事，注函数可模拟 ps 变化
+  const psTree = (typeof d.psTree === 'function' || Array.isArray(d.psTree)) ? d.psTree : null;
+  const jumpRunner = typeof d.jumpRunner === 'function' ? d.jumpRunner : undefined;
+  const jumpErrors = new Map();   // sessionId → { text, at }
+  let psCache = null;             // { at, list } —— 见 PS_CACHE_MS
+
+  // 进程表读一次给一轮里所有行共用。terminal-jump 接受「函数或数组」，这里给数组。
+  function psTreeCached(at) {
+    if (psTree) return psTree;   // 注入的自己管缓存
+    if (psCache && at - psCache.at < PS_CACHE_MS) return psCache.list;
+    let list = [];
+    try { list = terminalJump.readPsTree(); } catch (_) { list = []; }
+    psCache = { at, list };
+    return list;
+  }
+
+  // canJump 判定：委托给 lib/terminal-jump.js（归属判定唯一实现处），本文件不自己判。
+  function makeCanJump(at) {
+    const tree = psTreeCached(at);
+    return (tty) => terminalJump.detectTerminal(tty, tree) != null;
+  }
+
+  // 当前有效的行内错误（过了 TTL 就忘掉）
+  function activeJumpErrors(at) {
+    const out = {};
+    for (const [id, entry] of [...jumpErrors.entries()]) {
+      if (at - entry.at >= JUMP_ERROR_TTL_MS) { jumpErrors.delete(id); continue; }
+      out[id] = entry.text;
+    }
+    return out;
+  }
+
+  /**
+   * panel 点了某一行。查它的 tty → 生成脚本 → 执行；失败**不 throw 不静默**，
+   * 错误文案存起来随下一次快照回推，面板在该行下方显示行内错误条（DESIGN.md）。
+   */
+  function handleJump(pet, data) {
+    const at = now();
+    const sessionId = data && data.sessionId;
+    if (!sessionId) return { ok: false, reason: 'unavailable' };
+    const row = lastSnapshot.rows.find((r) => r.sessionId === sessionId);
+    let result;
+    if (!row || row.tty == null) {
+      result = { ok: false, reason: 'unavailable' };
+    } else {
+      result = terminalJump.runJump(row.tty, { psTree: psTreeCached(at), runner: jumpRunner });
+    }
+    if (result.ok) {
+      jumpErrors.delete(sessionId);
+    } else {
+      // reason==='unavailable' 是「压根找不到终端」，与「osascript 报错」文案不同：
+      // 前者用户该去别处找会话，后者是这次执行挂了，可以再试。
+      const text = result.reason === 'unavailable'
+        ? t('jump.unavailable')
+        : t('jump.failed', { reason: result.reason });
+      jumpErrors.set(sessionId, { text, at });
+    }
+    // 立刻回推一轮，用户点完当场看到结果，不用等下一个 tick
+    tick(pet);
+    return result;
+  }
+
   // 一轮采集。整体包 try/catch：抛出去会打死宿主定时任务，下一轮就没了。
   function tick(pet) {
     try {
       const at = now();
       const raw = readSnapshots(d.dir);
-      const result = aggregate(raw, { now: at, isPidAlive: alive, t });
+      const result = aggregate(raw, {
+        now: at, isPidAlive: alive, t,
+        canJump: makeCanJump(at),          // 判定实现在 lib/terminal-jump.js，这里只注入
+        jumpErrors: activeJumpErrors(at)   // 上次跳转失败的行内错误条
+      });
       // locale 随快照下发，panel 据此选词表（契约仍是 {rows, summary}，locale 是附加字段）
       result.locale = locale;
       lastSnapshot = result;
@@ -96,6 +173,7 @@ function createCollector(deps) {
     // 先接意图再起定时器：面板可能在 tick 之前就点了接入
     subscribe(pet, INSTALL_CLAUDE_EVENT, () => handleInstall(pet));
     subscribe(pet, UNINSTALL_CLAUDE_EVENT, () => handleUninstall(pet));
+    subscribe(pet, JUMP_EVENT, (data) => handleJump(pet, data));
     // 必须 await：pet.scheduler.every 返回的是 Promise<taskId>，
     // 直接存 Promise 会让 cancel 拿到个对象、恒 miss，旧定时器永不回收（宿主已知坑）。
     taskId = await pet.scheduler.every(TICK_MS, () => tick(pet));
@@ -112,7 +190,7 @@ function createCollector(deps) {
 
   return {
     start, stop, tick,
-    handleInstall, handleUninstall, pushInstallState,
+    handleInstall, handleUninstall, pushInstallState, handleJump,
     get taskId() { return taskId; },
     get lastSnapshot() { return lastSnapshot; }
   };
@@ -156,5 +234,6 @@ async function deactivate(pet) {
 module.exports = {
   activate, deactivate, createCollector,
   isPidAlive, TICK_MS,
-  SNAPSHOT_EVENT, INSTALL_STATE_EVENT, INSTALL_CLAUDE_EVENT, UNINSTALL_CLAUDE_EVENT
+  SNAPSHOT_EVENT, INSTALL_STATE_EVENT, INSTALL_CLAUDE_EVENT, UNINSTALL_CLAUDE_EVENT,
+  JUMP_EVENT, JUMP_ERROR_TTL_MS
 };
