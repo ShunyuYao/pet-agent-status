@@ -371,3 +371,79 @@ US-001 那条教训（「夹具造的形态现实中不存在」）的同型复�
   nvm 换 Node 版本后已装 hook 的 `execPath` 会静默失效而 `isInstalled` 查不出来。
 
 <verification>FAIL</verification>
+
+================================================================================
+## US-002 返工（第 2 轮验证 FAIL 修复）— DONE (commit 7c24f5d)
+
+按监工裁决（prd.json verificationNotes）修三条。**criteria/ 目录此前整个不存在**，
+判据只悬空在 verificationNotes 里 —— 本轮补建 `criteria/US-002.md` 落盘裁决原文，
+下轮验证 agent 可直接读文件，不必再从 prd.json 里捞。
+
+### 修复 1 — 备份首份不覆盖（真实缺口）
+
+`backup()` 无条件 `copyFileSync`。加 `if (fs.existsSync(dest)) return dest;` 短路。
+备份语义是「回滚到本插件动手之前」，不是「最近一次改动前」—— 重复点接入会把它刷成
+「已含 7 条钩子」的版本，用户 cp 回去后 `isInstalled()` 仍为 true，备份丧失唯一用途。
+新增两条断言（install 与 uninstall 两支都不刷新）+ 一条「回滚后 isInstalled === false」
+的用途自证 —— 只断言内容相等不够，要断言备份真能干成它该干的事。
+
+### 修复 2 — command 路径引号安全（上轮范围外观察升格为验收项）
+
+`hookCommand()` 裸空格拼 `${execPath} ${script}`。改为两段各用单引号包裹
+（`shellQuote`，路径含单引号按 `'\''` 惯例转义）。
+**实测证据**（/tmp 手工复现，非推测）：含空格目录下
+- 未加引号：`/bin/sh -c` 执行 rc=1，stderr 吐 `Cannot find module '/tmp/qtest/吐梨邦'` 堆栈
+- 加引号：rc=0，状态文件正常落盘
+这直接违反 hook 的「绝不打扰会话」铁律，不是纸面问题。
+
+### 修复 3 — 卸载还原判据（criteria 过强，已由监工澄清）
+
+「逐字节」降为「语义等价 + 键序保持」，`stringify(,,2)` 同风格场景保底逐字节。
+实现原本就满足，本轮改的是**测试的证明力**。
+
+### 测试从 15 → 21，重点是封死自证通道
+
+上轮 `tests/claude-installer-test.js:143` 之所以绿，是夹具用
+`JSON.stringify(c, null, 2)` 播种，与被测 `writeSettings` 输出**同源** —— 断言恒真。
+这是 US-001「夹具造了现实中不存在的形态」教训的同型复发（上轮是临时文件形态，
+这轮是 settings.json 排版形态）。修法：
+- `seed(content, indent, trailingNewline)` 支持 4 空格 / tab / 紧凑单行；
+  非 2 空格用例里**先断言夹具确实与实现输出不同源**，否则用例白测。
+- 键序单独查（`keyOrder()` 递归取 key 序列）—— `deepStrictEqual` 对 `{a,b}` 与
+  `{b,a}` 是相等的，光靠它证不了键序。
+- 含空格路径用例把仓库真拷进 `.../吐梨邦 plugins/pet-agent-status/` 再从副本 require
+  installer，用 `/bin/sh -c cmd` 执行（**像 Claude Code 那样整条丢给 shell**）。
+  原闭环用例也从「按第一个空格拆 bin/script」改成走 shell —— 自行拆参数恰好会
+  掩盖引号缺陷，是个假通道。
+
+### 反证（判 DONE 的依据，不只是看测试变绿）
+
+逐条把修复回退，确认对应用例转红：
+- 移除备份短路 → `重复 install 不覆盖首份备份` AssertionError
+- 移除引号 → 引号相关用例红（且 /tmp 独立复现 rc=1 vs rc=0 见修复 2）
+未回退时 21 条全绿。
+
+### 门禁与隔离
+
+`node --check` 覆盖 lib/ hooks/ tests/ 全部文件通过；
+claude-hook 21 + claude-installer 21 + state-files 20 = **62 全绿**。
+真实 `~/.local/state/pet-agent-status` 不存在、真实 `~/.claude/settings.json`
+无 `.bak-pet-agent-status` 产生（后者写成测试断言）。
+
+### 三条红线核对
+
+- 插件形态：新增仅 `shellQuote` 纯字符串函数，无新增 require；无 eval/动态 require/
+  自更新/正文采集。PASS
+- 设计：本 story 无 UI 产出，不适用。
+- 协议：未动 PROTOCOL.md，映射表七行不变，schema 恒 1。PASS
+
+### 范围外观察（非 FAIL，留给后续）
+
+- `shellQuote` 用 POSIX 单引号规则。宿主若在 Windows 上用 cmd.exe 执行 hook command，
+  单引号不是引用字符，这套引法不成立。本插件当前只面向 macOS（跳转依赖 osascript），
+  暂不处理；若将来上 Windows，引用策略需按平台分支。
+- 上两轮记的仍有效：`PermissionRequest` 可能比 `Notification` 更准；
+  nvm 换 Node 版本后已装 hook 的 `execPath` 会静默失效而 `isInstalled` 查不出来
+  （US-004 做面板状态时可补可执行性探测）。
+
+<story_completed>US-002</story_completed>
