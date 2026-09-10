@@ -36,10 +36,11 @@
       ],
       "criteriaFile": "criteria/US-002.md",
       "priority": 2,
-      "passes": true,
+      "passes": false,
       "verificationPasses": false,
-      "verificationNotes": "",
-      "notes": "fixtures 为按官方文档结构预置的样例；监工会用真实会话冒烟并替换为实录 payload。"
+      "verificationNotes": "监工裁决（2026-09-10）：FAIL1 备份覆盖=真实缺口，修 backup() 加 existsSync 短路并补断言。FAIL2 逐字节=criteria 过强已澄清（见 criteria/US-002.md 更新）：语义等价+键序保持即可，stringify(,,2) 同风格场景保底逐字节；夹具必须含非 2 空格风格防同源自证。另将范围外观察升格为验收项：hookCommand 路径引号安全（含空格目录下 hook rc=0）。按更新后的 criteria 修复。",
+      "notes": "fixtures 为按官方文档结构预置的样例；监工会用真实会话冒烟并替换为实录 payload。",
+      "reopenCount": 0
     },
     {
       "id": "US-003",
