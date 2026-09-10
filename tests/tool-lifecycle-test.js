@@ -15,6 +15,7 @@ const sf = require(path.join(ROOT, 'lib', 'state-files.js'));
 const tool = require(path.join(ROOT, 'tool', 'index.js'));
 const { createNodeI18n } = require(path.join(ROOT, 'lib', 'i18n.js'));
 const { DONE_ANIM, HOST_ANIM_STATES } = require(path.join(ROOT, 'lib', 'pet-link.js'));
+const installer = require(path.join(ROOT, 'lib', 'claude-hooks-installer.js'));
 
 const T0 = 1789000000000;
 const t = createNodeI18n('zh-CN').t;
@@ -60,6 +61,7 @@ function mockPet(opts) {
     cancelled: [],    // 收到的 id
     badCancel: [],    // 不是我发出去的 id（Promise / undefined / 陈旧值）
     emitted: [],      // [{ name, data }]
+    handlers: new Map(), // 事件名 → tool 注册的意图回调
     petCalls: []      // [['bubble', text] ...]
   };
   let seq = 0;
@@ -84,13 +86,18 @@ function mockPet(opts) {
       emit(name, data) {
         if (o.emitThrows) throw new Error('面板没开着');
         state.emitted.push({ name, data });
-      }
+      },
+      // panel 发来的意图（接入/移除钩子）挂在这里；测试用 state.handlers 从面板侧推
+      on(name, fn) { state.handlers.set(name, fn); }
     },
     pet: {
       bubble: (text) => state.petCalls.push(['bubble', text]),
       playAnim: (name) => state.petCalls.push(['playAnim', name])
     }
   };
+  // 每轮 tick 推的不止快照一条（还有接入态 agent-status:install-state），
+  // 所以「这轮推了几次快照」必须按事件名筛，不能数 emitted 的长度。
+  state.snapshots = () => state.emitted.filter((e) => e.name === tool.SNAPSHOT_EVENT);
   return { pet, state, liveCount: () => live.size };
 }
 
@@ -178,9 +185,9 @@ function collectorOn(dir, over) {
     const m = mockPet();
     const c = collectorOn(dir);
     await c.start(m.pet);
-    assert.strictEqual(m.state.emitted.length, 1, 'start 应主动 tick 一次');
-    assert.strictEqual(m.state.emitted[0].name, tool.SNAPSHOT_EVENT);
-    assert.strictEqual(m.state.emitted[0].name, 'agent-status:snapshot', '事件名带前缀防撞');
+    assert.strictEqual(m.state.snapshots().length, 1, 'start 应主动 tick 一次');
+    assert.strictEqual(m.state.snapshots()[0].name, tool.SNAPSHOT_EVENT);
+    assert.strictEqual(m.state.snapshots()[0].name, 'agent-status:snapshot', '事件名带前缀防撞');
   });
 
   await test('宿主定时回调触发 tick：快照经 events 推给 panel，行结构齐全', async () => {
@@ -191,8 +198,8 @@ function collectorOn(dir, over) {
     await c.start(m.pet);
     m.state.emitted.length = 0;
     m.state.every[0].fn();   // 宿主到点了这么调
-    assert.strictEqual(m.state.emitted.length, 1);
-    const { name, data } = m.state.emitted[0];
+    assert.strictEqual(m.state.snapshots().length, 1);
+    const { name, data } = m.state.snapshots()[0];
     assert.strictEqual(name, 'agent-status:snapshot');
     assert.strictEqual(data.rows.length, 1);
     for (const key of ['agent', 'form', 'project', 'state', 'subline', 'timeText', 'sessionId']) {
@@ -281,8 +288,8 @@ function collectorOn(dir, over) {
     const m = mockPet();
     const c = collectorOn(path.join(tmp(), '根本不存在'));
     await c.start(m.pet);
-    assert.deepStrictEqual(m.state.emitted[0].data.rows, []);
-    assert.strictEqual(m.state.emitted[0].data.summary.total, 0);
+    assert.deepStrictEqual(m.state.snapshots()[0].data.rows, []);
+    assert.strictEqual(m.state.snapshots()[0].data.summary.total, 0);
   });
 
   await test('损坏文件不打死 tick，归 unknown 行且绝不当 done', async () => {
@@ -292,11 +299,11 @@ function collectorOn(dir, over) {
     const m = mockPet();
     const c = collectorOn(dir);
     await c.start(m.pet);
-    const rows = m.state.emitted[0].data.rows;
+    const rows = m.state.snapshots()[0].data.rows;
     const bad = rows.find((r) => r.sessionId === 'broken');
     assert.ok(bad);
     assert.strictEqual(bad.state, 'unknown');
-    assert.strictEqual(m.state.emitted[0].data.summary.unknown, 1);
+    assert.strictEqual(m.state.snapshots()[0].data.summary.unknown, 1);
     assert.deepStrictEqual(m.state.petCalls, [], 'unknown 绝不触发完成提醒');
   });
 
@@ -332,6 +339,78 @@ function collectorOn(dir, over) {
   });
 
   // ---- 5. 只用披露过的 SDK 面 ----
+
+  // ---- 5.5 panel 的接入意图：tool 侧真接住并真改配置（US-004）----
+  //
+  // panel 的按钮只发意图。tool 这边没人接的话按钮就是死的（一点反应都没有），
+  // 而且是**静默**死 —— 与 US-003 那次「动作名宿主不认」同型。这里从意图入口
+  // 真跑到临时 settings.json 落盘。绝不碰真实 ~/.claude。
+
+  function settingsIn(dir, initial) {
+    const file = path.join(dir, 'settings.json');
+    fs.writeFileSync(file, JSON.stringify(initial || {}, null, 2));
+    return file;
+  }
+
+  await test('panel 发接入意图 → tool 真写 settings.json 并回推接入态', async () => {
+    const dir = tmp();
+    const settingsFile = settingsIn(dir, { model: 'opus' });
+    const m = mockPet();
+    const c = collectorOn(dir, { settingsFile });
+    await c.start(m.pet);
+
+    assert.strictEqual(installer.isInstalled({ settingsFile }), false);
+    // 首轮 tick 已经推过一次接入态（面板随开随关，每轮都要给）
+    const before = m.state.emitted.filter((e) => e.name === tool.INSTALL_STATE_EVENT);
+    assert.strictEqual(before.length, 1);
+    assert.strictEqual(before[0].data.claude, false);
+
+    const handler = m.state.handlers.get(tool.INSTALL_CLAUDE_EVENT);
+    assert.ok(handler, 'tool 没订阅接入意图 —— 面板按钮会是死的');
+    handler({});
+
+    assert.strictEqual(installer.isInstalled({ settingsFile }), true,
+      '收到意图但 settings.json 没被写 —— 意图没人真接');
+    const after = m.state.emitted.filter((e) => e.name === tool.INSTALL_STATE_EVENT);
+    assert.strictEqual(after[after.length - 1].data.claude, true, '接入后没回推新的接入态');
+    // 用户原有配置原样保留（US-002 铁律）
+    assert.strictEqual(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).model, 'opus');
+  });
+
+  await test('panel 发移除意图 → tool 真摘除钩子并回推未接入', async () => {
+    const dir = tmp();
+    const settingsFile = settingsIn(dir, {});
+    installer.install({ settingsFile });
+    assert.strictEqual(installer.isInstalled({ settingsFile }), true);
+
+    const m = mockPet();
+    const c = collectorOn(dir, { settingsFile });
+    await c.start(m.pet);
+    const handler = m.state.handlers.get(tool.UNINSTALL_CLAUDE_EVENT);
+    assert.ok(handler, 'tool 没订阅移除意图');
+    handler({});
+
+    assert.strictEqual(installer.isInstalled({ settingsFile }), false);
+    const states = m.state.emitted.filter((e) => e.name === tool.INSTALL_STATE_EVENT);
+    assert.strictEqual(states[states.length - 1].data.claude, false);
+  });
+
+  await test('settings.json 不可写时意图失败也不打死采集器', async () => {
+    const dir = tmp();
+    const m = mockPet();
+    // 把「父目录」造成一个普通文件：mkdirSync 必抛 ENOTDIR，install 失败。
+    // （单纯指一个不存在的目录不行 —— writeSettings 会 mkdir -p 出来，install 反而成功。）
+    const blocker = path.join(dir, 'blocker');
+    fs.writeFileSync(blocker, 'not a directory');
+    const c = collectorOn(dir, { settingsFile: path.join(blocker, 'settings.json') });
+    await c.start(m.pet);
+    m.state.handlers.get(tool.INSTALL_CLAUDE_EVENT)({});
+    const states = m.state.emitted.filter((e) => e.name === tool.INSTALL_STATE_EVENT);
+    assert.strictEqual(states[states.length - 1].data.claude, false);
+    // 采集器还活着：定时回调照跑
+    m.state.every[0].fn();
+    assert.ok(m.state.snapshots().length >= 2, '意图失败后采集器不该停摆');
+  });
 
   await test('采集器只碰 scheduler / events / pet 三个命名空间', async () => {
     const dir = tmp();
