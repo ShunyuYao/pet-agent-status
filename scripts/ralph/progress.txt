@@ -1527,3 +1527,253 @@ criteria §6 把「测试真跑 osascript」列为越界。光在注释里写「
    nvm 换 Node 版本后已装 hook 的 `execPath` 会静默失效而 `isInstalled` 查不出来。
 
 <story_completed>US-005</story_completed>
+
+---
+
+## VERIFICATION REPORT — US-005（点击会话行跳回终端）
+
+验证 agent，只读复验，未改任何产品源文件。
+
+```
+node --check（lib/ tool/ hooks/ 全 10 个 .js）:  PASS
+仓内测试（tests/*-test.js 全 7 个）:            PASS（203 passed，退出码全 0）
+  └ tests/terminal-jump-test.js                PASS（49 passed，exit 0）
+三支判定/脚本生成（各自独立断言）:              PASS
+注入安全:                                       PASS
+失败回推行内错误条:                             PASS
+独立复验脚本（/tmp，20 断言）:                  PASS（已删除）
+Overall: PASS
+```
+
+### 1. Code-Based
+
+- `node --check`：hooks/claude-status-hook.js、lib/{tty-detect,pet-link,terminal-jump,
+  claude-hooks-installer,aggregate,claude-events,state-files,i18n}.js、tool/index.js 全过。
+- 7 个测试文件逐个跑，退出码全 0；合计 203 passed（terminal-jump 49 / panel-dom 26 /
+  aggregate 37 / claude-installer 27 / claude-hook 22 / tool-lifecycle 22 / state-files 20）。
+
+### 2. Model-Based（逐条对照 criteria §2）
+
+- **判定只此一处** PASS。`detectTerminal` 是唯一实现（lib/terminal-jump.js:101）；
+  tool 只把它包成 `makeCanJump` 注入 aggregate（tool/index.js:80-83），aggregate 用注入的
+  `canJump`（lib/aggregate.js:104,116）自己不判，panel 只读 `row.canJump`（panel.html:327）。
+  我另用源码扫描独立复核：panel/panel.html 与 lib/aggregate.js 全文无
+  `iTerm|Terminal.app|osascript|tell application` 任一字样。
+- **buildScript 两支精确档** PASS。iterm2 走 windows>tabs>sessions 按 `tty of s` 匹配后
+  select w/tb/s + activate；terminal 走 `tty of tb` + `set selected` + `set index of w to 1`。
+  两支文本各含 `"/dev/ttys007"` 字面量，且各自只提自己的 App（互不串台，我单独断言过）。
+- **引号安全** PASS，且做法比 criteria 要求的更强：tty 不靠转义，走 `TTY_RE=/^tty[a-z0-9]+$/i`
+  白名单**拒绝**（terminal-jump.js:52）——不合规直接 null，面板连入口都不给。App 名是内部
+  常量另走 `escapeAppleString`。两道防线各管各的。
+- **兜底档不假装精确** PASS。`activate:` 分支只产 `tell application "X" to activate`，
+  文本里既无 tty 也无 repeat/select/tty of（我逐条断言过）。
+- **null 支不给入口** PASS。`canJump` 缺省 false、tty 为 null 时 false、判定抛错时退回 false、
+  unknown 行 false；panel 只在 `row.canJump` 为真时才 addClass('can-jump') 并挂 click handler
+  ——不可点的行没有 handler，不是「点了没反应」而是压根没绑。
+- **执行壳不 throw 不静默** PASS。`runJump` 把执行器异常、非零退出、超时统一收敛成
+  `{ok:false, reason}`（terminal-jump.js:213-250）；tool 的 `handleJump` 存进 jumpErrors 后
+  **立刻 tick 回推一轮**（tool/index.js:121），用户点完当场看到，不用等下一个 tick。
+  错误条有 TTL 自动消失，成功后清除该行错误。文案走 locales（zh-CN/en 都有 jump.failed /
+  jump.unavailable 两键），`unavailable` 与执行失败分成两档文案。
+
+### 3. 独立复验（自写脚本，未复用仓内夹具/辅助函数，跑完已删）
+
+`/tmp/us005-indep.js`，20 条断言全过，其中：
+
+- **三组伪造 psTree**（父 iTerm2 / 父 Terminal.app / 父 code）→ detectTerminal 分别返回
+  `'iterm2'` / `'terminal'` / `null`；另测 VS Code → `activate:Visual Studio Code`、
+  tty 不在表里 → null、无 /dev 前缀等价、ppid 成环不死循环。
+- **注入用例**：`/dev/ttys00'; do evil`、含换行注 `tell application "Finder"`、
+  `ttys004"; do shell script "rm -rf /"`、`../../etc/passwd`、含 `\n do shell script "id"`
+  五种恶意 tty，`isValidTty/detectTerminal/buildScript(两支)/scriptForTty` 全部 null；
+  走 runJump 时**执行器一次都没被调用**（断言 called===0），reason=unavailable。
+- **端到端（真实 DOM 事件，非直调）**：jsdom 起 panel + 真 tool collector，用真实
+  schema:1 状态文件喂临时目录，注入伪造进程表让该行 canJump=true，
+  `rowEl.dispatchEvent(new MouseEvent('click'))` → tool 实际尝试跳转 1 次 → 失败文案
+  经快照回推 → `.jump-error` 出现且**紧挨该行下方**、`dataset.sessionId` 对得上、全列表
+  只有一条。反面用例：进程表换成认不出终端时该行无 `can-jump`、点击后执行器 0 次调用。
+
+### 4. 「没真跑外部命令」是观测出来的，不是声明的
+
+自写 `-r` 预加载补丁把 child_process 七个入口全包一层，命中 `osascript`/`ps` 即抛。
+**补丁先自证**（直接调一次 `ps` 确认真抛 BANNED），再带着补丁把 7 个测试文件 + 我的独立
+脚本整套重跑一遍：**退出码全 0，无一条 BANNED**。即测试全程确实没碰真实进程表、
+没骚扰真实桌面。（这正是 knowledge.md「注入点静默回落」那条教训的反向验证，本轮复发已被堵住。）
+
+另核对副作用：`~/.local/state/pet-agent-status/` 全程未被创建（跑完仍不存在），
+`~/.claude/settings.json` mtime 停在 Sep 10 10:30:44 未变，工作树 `git status` 干净。
+
+### 5. 测试壳诚实性反证（knowledge.md「同步壳跑 async 用例」那条的复核）
+
+terminal-jump-test.js 的壳已是 `for (const {name,fn} of queue) { await fn() }` 串行等待。
+我复制一份到 tests/ 下追加一条**必失败的 async 用例**实跑：输出 `1 failed / 49 passed`
+且 **node 退出码 1**——失败会被捕获、计数、并染红退出码，不会再出现「先打 passed 再炸堆栈」
+的假绿。反证文件已删除。
+
+### 6. 三条红线
+
+- **插件形态** PASS。manifest 未新增 permissions；`ps`/`osascript` 两条 spawn 都在 README
+  「权限披露」表里列明（仓内还有一条漂移守卫测试盯着「实际 spawn 的命令 ⊆ 披露表」）；
+  无 eval / new Function / 动态拼接 require（require 全是 `path.join(LIB, 常量)` 字面量）；
+  panel 无 `<script src>`、无远程资源（全文仅有的 http 串是 SVG 命名空间 URL）；不采集会话正文。
+- **设计** PASS。行内错误条 `.jump-error` 用 `var(--danger)`（#EB5757）+ 红 12% 底，
+  挂在该行下方；不弹窗（panel 全文无 alert/confirm）；不可点的行不显手型
+  （`cursor:pointer` 只在 `.row.can-jump`），符合 DESIGN.md「禁止假入口」。
+- **协议** PASS。PROTOCOL.md 未动，schema 恒 1；`canJump`/`jumpError` 只在内存快照里，
+  不落盘（state-files 的闭集断言仍全绿）。
+
+### 范围外观察（非 FAIL）
+
+1. 上一轮报告第 2 点仍是最需要监工关注的：`"iTerm2"` 这个 AppleScript app 名与
+   `"Terminal"` 两支**都无法在离线测试里证伪**（criteria 明令不跑 osascript）。这类
+   「字符串交给外部系统查表」的地方，正是 knowledge.md 记的 `playAnim` 同型风险 ——
+   区别在于 playAnim 的合法集合能在仓内存快照，AppleScript app 名不能。真机冒烟时
+   若某一支跳不动，优先怀疑这两个名字，而不是判定逻辑。
+2. `FALLBACK_APPS` 是手工枚举的快照，装了表外终端 → null（不给入口，不会误跳）。
+3. 首次跳转会触发 macOS「自动化」授权弹窗，用户未点前这次跳转超时并把 osascript 原始
+   英文报错塞进错误条，对中文用户不够友好；可考虑给「未授权」单列一档文案。
+4. `detectTerminal` 在多个终端 App 嵌套（如 Warp 里跑 tmux 再 attach）时按父链第一个命中的
+   App 返回，未处理 tmux/screen 这类 multiplexer——criteria 未要求，记录备查。
+
+Overall: **PASS**
+
+================================================================================
+## US-006 Codex CLI hooks 接入 — DONE (commit 635be6c)
+
+前置门：`fixtures/codex-hooks-facts.md` **存在**（监工 codex-cli 0.153.4 实测，
+commit abb7290），四份实录夹具 + 一份待校准的 PermissionRequest 预置夹具在位。开工合规。
+
+产出：lib/codex-events.js、hooks/codex-status-hook.js、lib/codex-hooks-installer.js、
+lib/hooks-installer-core.js（新，见下）、tests/codex-hook-test.js（52 条），
+改动 PROTOCOL.md / panel / tool / locales / README / claude-hooks-installer.js。
+
+门禁：`node --check` git 跟踪的全部 JS 通过；8 个测试文件 **258 条全绿**
+（codex-hook 52 / terminal-jump 49 / aggregate 37 / panel-dom 29 / claude-installer 27 /
+claude-hook 22 / tool-lifecycle 22 / state-files 20），退出码均 0。
+
+### 关键决策 1：安装器提取共用内核，而不是给 Codex 抄一份
+
+facts 实测确认 `$CODEX_HOME/hooks.json` 的 hooks 段与 Claude settings.json **结构同构**。
+`claude-hooks-installer.js` 那 250 行背着 US-002 四轮返工换来的三条不变量：
+备份首份不覆盖 / 摘除粒度=command 粒度 / 删 key 判据是创建归属（非「空了就删」）。
+抄一份 = 把三条 fork 成两份，改一处漏一处，且 Codex 那份从没被那四轮检验过。
+
+落法：新增 `lib/hooks-installer-core.js#createInstaller(spec)`，差异（配置路径、事件集合、
+hook 脚本、标记字段名）全部参数化；两个 installer 都是薄壳。**Claude 侧对外 API 一字未改**
+（仍收 `settingsFile`），既有 203 条测试原样全绿 —— 这是重构没走样的证据。
+
+### 关键决策 2：等待态事件名是 PermissionRequest，不是 Notification
+
+Codex 与 Claude 的事件名大面积重合，唯独等待态不同（facts §事件表）。照 Claude 抄一个
+`Notification` 进来，就是 criteria §6 明令 FAIL 的「凭训练记忆写」。测试专门造了一条
+反向用例：喂 `hook_event_name:"Notification"` 必须**不写文件**。
+
+同理，facts 里「二进制确认存在但语义待实录」的 PreCompact/PostCompact/SubagentStart/
+SubagentStop/Interrupt 一律走未知事件路径忽略。**Interrupt 尤其不能猜成 done** ——
+那会让宠物误报「差事办完啦」，比不显示坏得多。
+
+### 关键决策 3：threadId 只在 session_id 是 UUID 时写
+
+facts 说 Codex 的 session_id 本身就是线程号（UUID v7，可拼 `codex://threads/<id>`）。
+但协议里 threadId 是**选填**，形态对不上就不写 —— 写个下游拼出来是死链的假值，
+比不写更坏。用例：`session_id:'not-a-uuid'` → 记录里无 threadId 且仍通过 validateRecord。
+
+### 关键决策 4：绝不写 hooks.state（Codex 信任机制）
+
+facts §hook trust：hooks.json 变更后 Codex 首启会要求「Trust all and continue」，
+信任状态存 `hooks.state`。installer 自动写它 = 替用户点头绕过安全设计。
+本插件不碰（写成断言：install+uninstall 后目录里不得出现 hooks.state），
+改由**面板在接入成功后显示信任提示**（`empty.codexTrust`）—— 不提的话钩子装了却不生效，
+用户只会以为插件坏了。
+
+### panel：Codex 从「即将支持」灰字升为真次入口
+
+DESIGN.md §空态原文就写着「US-006 落地前显示『即将支持』灰字」。US-006 落地后**还留灰字
+才是假入口**（功能有了却没入口）。故把 US-004 那条「Codex 是灰字非按钮」的用例改为
+「Codex 是真按钮」，并补三条：独立翻面（只装 Codex 时 Claude 那档不受影响）、
+接入意图事件、移除意图事件。install-state 载荷加 `codex` 字段（加字段不改契约）。
+
+### 反证：九个探针，八红一绿 —— 那一绿是我的测试有缺陷，已修
+
+在 /tmp 的仓库副本上逐个改坏实现（跑完已删）：
+
+| 探针 | 结果 |
+|---|---|
+| A 等待态改回 Notification | 转红 2 ✓ |
+| B threadId 不校验 UUID | 转红 1 ✓ |
+| C agent 写成 claude-code | 转红 9 ✓ |
+| D 备份去掉首份短路 | **仍绿** → 见下 |
+| E 摘除退回整分组删 | 转红 1 ✓ |
+| F 删 key 退回「空了就删」 | 转红 1 ✓ |
+| G hook 出错非 0 退出 | 转红 6 ✓ |
+| H command 去掉引号 | 转红 1 ✓ |
+| I Interrupt 猜成 done | 转红 2 ✓ |
+
+**D 仍绿是断言恒真，不是实现有额外韧性**（先确认 short-circuit 确实被删掉了才下的判断）。
+根因：我把序列排成 `install ×2 → uninstall → install`，而 **uninstall 已经把文件还原回
+原文**，此时刷新备份复制的是一模一样的字节 —— 序列本身不具备区分能力。
+改成「第二次 install 之前先断言文件已含钩子」后，D 立刻转红。
+另补一条 uninstall 路径的备份不刷新断言。
+
+这条值得记：**「改坏实现看是否转红」必须连『改坏动作真的生效了』一起确认**，
+否则会把 perl 没匹配上当成「实现有韧性」。本轮是先 grep 确认代码已改才发现是测试的锅。
+
+### 本轮测试自身抓到并修掉的两个缺陷（不是事后补的）
+
+1. **拿 tty=null 的记录断言 canJump=true**：hook 在管道里跑，落盘 tty 必为 null
+   （协议明写「拿不到为 null」），我却断言该行可跳 —— 在验一个不成立的前提。
+   已拆成两条：端到端那条让可跳性**跟着实际 tty 走**（`canJump === (tty != null)`，
+   pty 下跑也成立）；另立一条用带 tty 的 codex 记录无条件跑通 点击→jump→失败回推错误条。
+   没有把 tty 硬造进 hook 产出（那就是 knowledge.md 记了三次的「夹具与真实产出不同形」）。
+2. **零特判用例用 `/codex/i.test(源码)` 判**：aggregate 里那句「Codex App 任务是二期」
+   的注释直接把它判红。判据应是「有没有按厂牌分叉的流程分支」，不是「文件里有没有这个词」。
+   已改为剥注释后查流程分支，并另查 rowEl 里不得有 codex 特判。
+
+### 「没真跑外部命令」是观测出来的
+
+自写 `-r` 预加载补丁包住 child_process 七个入口，命中 `osascript`/`ps` 即抛。
+**补丁先自证**（直接调一次 `ps`，确认真抛 BANNED），再带补丁把 8 个测试文件整套重跑：
+退出码全 0、BANNED 零命中。即测试全程确实没碰真实进程表、没骚扰真实桌面。
+
+### 独立复验（不复用仓内测试与辅助函数，/tmp 自写，跑完已删）
+
+5 组断言全绿：四份实录夹具 spawn 喂 stdin 后 agent/state/threadId/project 逐项对；
+prompt 正文（"只回复两个字"）不落盘；codex 记录经 aggregate 与 claude 行**键集合同构**且
+unknownCount=0；installer 写出的结构与 facts §配置 形状一致、卸载后与原文 deepStrictEqual
+（含用户的 `PreCompact: []` 空数组保住）、目录里无 hooks.state。
+
+### 三条红线核对
+
+- **插件形态** PASS。新增四个模块只 require `fs`/`os`/`path` + 仓内相对模块
+  （写成断言逐文件扫）；无 eval/new Function/动态拼接 require/联网/fetch；不采集会话正文
+  （实录夹具的 prompt / last_assistant_message / transcript_path / model 均断言不落盘）。
+  改 `~/.codex/hooks.json` 已在 README 权限披露表内（本轮把该行从「Codex hooks 配置」
+  写实为具体路径，并注明不碰 hooks.state）。manifest 未新增 permissions。
+- **设计** PASS。Codex 次入口按 DESIGN.md §空态实现（次按钮/灰字档，不是蓝主按钮）；
+  行渲染对两个厂牌同构，徽标由既有 `agent` 字段驱动（US-004 已实现 is-codex 底色与
+  官方 SVG，本轮零改动即生效）。
+- **协议** PASS。PROTOCOL.md **只增不改**：Claude Code 映射表七行逐行断言原样在位
+  （git diff 亦已核对，两处改动都是 US-006 被授权补的占位行）；schema 恒 1；
+  落盘字段集合为协议闭集（含选填 threadId），经 state-files 自己的校验器复核。
+
+### 范围外观察（非 FAIL，留给后续/监工）
+
+1. **坏文件行的厂牌恒显 Claude**：`lib/aggregate.js:128` 给损坏/schema 过高的文件兜底
+   `agent:'claude-code'`。正文都没解析出来，厂牌本就不可知 —— 读不出来的 **codex** 会话
+   会挂上 Claude 徽标，属轻微误导。这是 US-003 冻结行为（`aggregate-test.js:214` 断言了它），
+   本轮不擅自改；建议监工考虑给 unknown 行一个中性徽标档。
+2. **PermissionRequest 夹具仍是预置的**（facts 标「待实录校准」，二进制确认但未实录）。
+   真实 payload 回填后需复跑 `tests/codex-hook-test.js` 那条用例。当前实现容忍未知字段，
+   字段增减不会挂，但**事件名若与实测不符则整条等待态失效** —— 冒烟时优先看这一支。
+   同理 PreToolUse/PostToolUse 也只有二进制确认。
+3. **hook trust 无法在仓内验证**：接入后必须由用户在 Codex TUI 点 Trust 钩子才会跑。
+   面板已加提示文案，但「提示够不够显眼、用户看不看得懂」只能真机冒烟定。
+   这与 US-005 的 AppleScript app 名同型：交给外部系统的东西，仓内测试证不到底。
+4. `CODEX_HOME` 是 Codex 官方环境变量，本插件 `hooksPath()` 读它做缺省。若用户在
+   shell 里设了 CODEX_HOME 而桌宠宿主进程没继承到，面板算出的路径会与用户实际的不一致
+   （表现为「装了但 Codex 那边没有」）。宿主进程环境变量继承情况本仓判不了，记录备查。
+5. 前几轮记的仍有效：`form` 恒 'cli'；error 行不受 20min 淡出约束；面板高度定死 420，
+   会话超约 5 条时底部提示被挤出视野；nvm 换 Node 版本后已装 hook 的 `execPath`
+   会静默失效而 `isInstalled` 查不出来（两个厂牌现在都有这个问题）。
+
+<story_completed>US-006</story_completed>

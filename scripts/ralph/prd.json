@@ -94,7 +94,7 @@
       "criteriaFile": "criteria/US-005.md",
       "priority": 5,
       "passes": true,
-      "verificationPasses": false,
+      "verificationPasses": true,
       "verificationNotes": "",
       "notes": "osascript 不在测试里真跑；真实聚焦冒烟由监工在宿主环境做。"
     },
@@ -112,7 +112,7 @@
       ],
       "criteriaFile": "criteria/US-006.md",
       "priority": 6,
-      "passes": false,
+      "passes": true,
       "verificationPasses": false,
       "verificationNotes": "",
       "notes": "严禁在没有 facts 文件时按猜测实现（先复现再实现的硬规矩）。"
