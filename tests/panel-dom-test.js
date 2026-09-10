@@ -251,7 +251,7 @@ test('5 行快照：行数 / waiting 置顶且带描边 class / 各行状态 cla
   // 快照里必须真有这五种态，否则下面的断言是空转
   assert.deepStrictEqual(
     snap.rows.map((r) => r.state).sort(),
-    ['error', 'idle', 'running', 'running', 'waiting']
+    ['done', 'error', 'running', 'running', 'waiting']
   );
 
   const p = mountPanel();

@@ -63,7 +63,8 @@ Codex 侧附加约定：
 ## 采集器推导态（不落盘）
 
 - `error`：文件 state 为 `running`/`waiting` 且 `ts` 距今 > 60s 且 `pid` 非 null 且进程不存活。
-- `idle`：state 为 `done`/`ended` 或任何状态 `ts` 距今 > 20min；idle 超 20min 从面板移除。
+- `done`（展示驻留）：state 为 `done`/`ended` 且 `ts` 距今 ≤ 5min，按「已完成」绿展示（2026-09-10 修订，对齐 DESIGN.md 图例）。
+- `idle`：done/ended 超 5min 驻留窗，或任何状态 `ts` 距今 > 20min；idle 超 20min 从面板移除。
 - `unknown`：文件损坏/schema 高于当前支持版本/来源语义不明。**绝不映射为 done**。
 
 ## 路径覆盖约定（测试隔离）

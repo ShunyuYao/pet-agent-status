@@ -96,15 +96,18 @@ test('60s 边界：正好 60s 不判 error，60s+1ms 才判', () => {
 
 // ---- 2. idle 推导与 20min 移除 ----
 
-test('done / ended 一律显示为 idle', () => {
+test('done / ended 前 5 分钟显示为 done（绿驻留），过窗转 idle', () => {
   const dir = tmp();
   const snap = seed(dir, [
     rec({ sessionId: 'a', state: 'done', lastEvent: 'Stop', ts: T0 - 1000 }),
-    rec({ sessionId: 'b', state: 'ended', lastEvent: 'SessionEnd', ts: T0 - 1000 })
+    rec({ sessionId: 'b', state: 'ended', lastEvent: 'SessionEnd', ts: T0 - 1000 }),
+    rec({ sessionId: 'c', state: 'done', lastEvent: 'Stop', ts: T0 - 6 * MIN }),
+    rec({ sessionId: 'edge', state: 'done', lastEvent: 'Stop', ts: T0 - 5 * MIN })
   ]);
   const states = {};
   for (const r of run(snap).rows) states[r.sessionId] = r.state;
-  assert.deepStrictEqual(states, { a: 'idle', b: 'idle' });
+  // 驻留窗边界（恰好 5 分钟）仍算 done，过一毫秒才转 idle
+  assert.deepStrictEqual(states, { a: 'done', b: 'done', c: 'idle', edge: 'done' });
 });
 
 test('running 超 20min 变 idle', () => {
@@ -116,7 +119,7 @@ test('running 超 20min 变 idle', () => {
 test('idle 超 20min 不进输出行（面板移除）', () => {
   const dir = tmp();
   const snap = seed(dir, [
-    rec({ sessionId: 'fresh', state: 'done', lastEvent: 'Stop', ts: T0 - 5 * MIN }),
+    rec({ sessionId: 'fresh', state: 'done', lastEvent: 'Stop', ts: T0 - 6 * MIN }),
     rec({ sessionId: 'stale', state: 'done', lastEvent: 'Stop', ts: T0 - 25 * MIN })
   ]);
   assert.deepStrictEqual(byId(run(snap).rows), ['fresh']);
@@ -182,7 +185,7 @@ test('criteria §3 场景：[waiting 置顶, running, done(idle), error]', () =>
   // error 只因 pid 探测为假而来：同一份输入换成「pid 存活」就该是 running
   const dead = run(snap, { isPidAlive: (pid) => pid !== 999999 });
   assert.deepStrictEqual(byId(dead.rows), ['w-old', 'r-new', 'e', 'd']);
-  assert.deepStrictEqual(dead.rows.map((r) => r.state), ['waiting', 'running', 'error', 'idle']);
+  assert.deepStrictEqual(dead.rows.map((r) => r.state), ['waiting', 'running', 'error', 'done']);
   const allAlive = run(snap, { isPidAlive: () => true });
   assert.strictEqual(allAlive.rows.find((r) => r.sessionId === 'e').state, 'running',
     'error 必须来自 pid 探测，不是别的原因');
@@ -199,7 +202,7 @@ test('非 waiting 行只按 ts 降序，与状态无关（error 不因是 error 
   ]);
   const { rows } = run(snap, { isPidAlive: (pid) => pid !== 999999 });
   assert.deepStrictEqual(byId(rows), ['d', 'e'], 'ts 更新的 done 应排在更旧的 error 之前');
-  assert.deepStrictEqual(rows.map((r) => r.state), ['idle', 'error']);
+  assert.deepStrictEqual(rows.map((r) => r.state), ['done', 'error']);
 });
 
 // ---- 5. 行结构：panel 不再算业务字段 ----
@@ -269,7 +272,7 @@ function mockPet() {
 // 造行时 raw 跟着 state 走，与 aggregate 真实产出同形：
 // done/ended 的展示态是 idle，联动看的是 raw。用裸 state 造行会走进兼容回落分支，
 // 等于在测一个 aggregate 根本不产出的形态（US-001「夹具形态必须真实」的教训）。
-const DISPLAY = { done: 'idle', ended: 'idle' };
+const DISPLAY = { done: 'done', ended: 'done' };  // 5 分钟驻留窗内的展示态
 const row = (over) => {
   const o = Object.assign({ sessionId: 's', project: 'alpha', state: 'running' }, over);
   if (o.raw == null) o.raw = o.state;
@@ -388,7 +391,7 @@ test('全链路：done 落盘后宠物真的提醒（展示态是 idle 也照喊
   // hook 写入 done：展示态被推成 idle（灰、随后淡出），但联动必须按落盘态触发
   sf.writeStatus(rec({ sessionId: 'a', state: 'done', lastEvent: 'Stop', ts: T0 + 1000 }), dir);
   out = run(sf.readSnapshots(dir), { now: T0 + 2000 });
-  assert.strictEqual(out.rows[0].state, 'idle', '展示态：done/ended 一律显示为 idle');
+  assert.strictEqual(out.rows[0].state, 'done', '展示态：done 驻留窗内显示为 done');
   assert.strictEqual(out.rows[0].raw, 'done', '落盘态原样带出，供联动判定迁移');
   link.onSnapshot(out.rows, m, { now: T0 + 2000, t });
   assert.deepStrictEqual(m.calls, [

@@ -600,7 +600,7 @@ test('零特判：codex 会话的 Stop 同样驱动 done 联动（raw 带下去�
   const out = agg.aggregate(sf.readSnapshots(dir), { now: T0, isPidAlive: () => true, t });
   const row = out.rows.find((r) => r.agent === 'codex');
   assert.ok(row, 'codex Stop 记录没进快照');
-  assert.strictEqual(row.state, 'idle', '展示态应是 idle（灰、随后淡出）');
+  assert.strictEqual(row.state, 'done', '展示态应是 done（绿驻留 5 分钟，随后转 idle 淡出）');
   assert.strictEqual(row.raw, 'done', 'raw 必须保留 done，否则宠物联动永远等不到完成');
 });
 
