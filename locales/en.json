@@ -1,0 +1,32 @@
+{
+  "panel.title": "Agent Sessions",
+  "panel.close": "Close",
+  "panel.summary.running": "{n} running",
+  "panel.footer.hint": "Click a session to jump back · your pet pings you when it's done",
+
+  "state.running": "Running",
+  "state.waiting": "Waiting for you",
+  "state.done": "Done",
+  "state.ended": "Ended",
+  "state.error": "Possibly interrupted",
+  "state.idle": "Idle",
+  "state.unknown": "Unknown",
+
+  "time.minutesAgo": "{n} min ago",
+  "time.justNow": "just now",
+
+  "empty.title": "No sessions yet",
+  "empty.desc1": "Install the Claude Code hooks and sessions will show up here.",
+  "empty.desc2": "Your pet will ping you when a task finishes or needs approval.",
+  "empty.installClaude": "Install Claude Code hooks",
+  "empty.installCodex": "Install Codex CLI hooks",
+  "empty.codexComingSoon": "Codex CLI coming soon",
+  "empty.installed": "Installed ✓",
+  "empty.uninstall": "Remove hooks",
+
+  "bubble.done": "✅ {project} is all done!",
+  "bubble.waiting": "✋ {project} needs your approval",
+
+  "jump.failed": "Jump failed: {reason}",
+  "jump.unavailable": "Can't find the terminal for this session"
+}
