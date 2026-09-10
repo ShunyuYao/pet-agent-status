@@ -2,3 +2,9 @@ node_modules/
 .DS_Store
 scripts/ralph/progress.txt.bak
 .codex-acceptance/
+scripts/ralph/logs/
+scripts/ralph/.lock/
+scripts/ralph/.last-branch
+scripts/ralph/.ralph-current-run
+scripts/ralph/.codex-acceptance/
+scripts/ralph/.dual-track/
