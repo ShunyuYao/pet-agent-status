@@ -56,7 +56,7 @@
       ],
       "criteriaFile": "criteria/US-003.md",
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "verificationPasses": false,
       "verificationNotes": "",
       "notes": "宿主动画冲突（睡眠/抓起）本仓库拿不到宿主状态，按『bubble 永发、playAnim 经可配置守卫函数』实现并留 TODO 注释，由宿主内真机验收定参。"

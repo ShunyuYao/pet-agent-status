@@ -175,8 +175,8 @@ test('criteria §3 场景：[waiting 置顶, running, done(idle), error]', () =>
   const snap = seed(dir, [
     rec({ sessionId: 'r-new', state: 'running', ts: T0 - 5 * 1000 }),
     rec({ sessionId: 'w-old', state: 'waiting', lastEvent: 'Notification', ts: T0 - 10 * MIN }),
-    rec({ sessionId: 'd', state: 'done', lastEvent: 'Stop', ts: T0 - 2 * MIN }),
-    rec({ sessionId: 'e', state: 'running', pid: 999999, ts: T0 - 3 * MIN })
+    rec({ sessionId: 'e', state: 'running', pid: 999999, ts: T0 - 2 * MIN }),
+    rec({ sessionId: 'd', state: 'done', lastEvent: 'Stop', ts: T0 - 3 * MIN })
   ]);
   // error 只因 pid 探测为假而来：同一份输入换成「pid 存活」就该是 running
   const dead = run(snap, { isPidAlive: (pid) => pid !== 999999 });
@@ -185,6 +185,20 @@ test('criteria §3 场景：[waiting 置顶, running, done(idle), error]', () =>
   const allAlive = run(snap, { isPidAlive: () => true });
   assert.strictEqual(allAlive.rows.find((r) => r.sessionId === 'e').state, 'running',
     'error 必须来自 pid 探测，不是别的原因');
+});
+
+// 上一条里 e 排在 d 前面**只因为 e 的 ts 更新**，不是「error 比 idle 优先」。
+// DESIGN.md 排序规则只有两档（waiting 置顶 / 其余 ts 降序），没有按状态排的第三档；
+// 把两者 ts 对调，顺序就该跟着翻过来——否则说明实现偷偷加了状态优先级。
+test('非 waiting 行只按 ts 降序，与状态无关（error 不因是 error 而置前）', () => {
+  const dir = tmp();
+  const snap = seed(dir, [
+    rec({ sessionId: 'e', state: 'running', pid: 999999, ts: T0 - 9 * MIN }),
+    rec({ sessionId: 'd', state: 'done', lastEvent: 'Stop', ts: T0 - 1 * MIN })
+  ]);
+  const { rows } = run(snap, { isPidAlive: (pid) => pid !== 999999 });
+  assert.deepStrictEqual(byId(rows), ['d', 'e'], 'ts 更新的 done 应排在更旧的 error 之前');
+  assert.deepStrictEqual(rows.map((r) => r.state), ['idle', 'error']);
 });
 
 // ---- 5. 行结构：panel 不再算业务字段 ----
@@ -251,9 +265,18 @@ function mockPet() {
     }
   };
 }
-const row = (over) => Object.assign({ sessionId: 's', project: 'alpha', state: 'running' }, over);
+// 造行时 raw 跟着 state 走，与 aggregate 真实产出同形：
+// done/ended 的展示态是 idle，联动看的是 raw。用裸 state 造行会走进兼容回落分支，
+// 等于在测一个 aggregate 根本不产出的形态（US-001「夹具形态必须真实」的教训）。
+const DISPLAY = { done: 'idle', ended: 'idle' };
+const row = (over) => {
+  const o = Object.assign({ sessionId: 's', project: 'alpha', state: 'running' }, over);
+  if (o.raw == null) o.raw = o.state;
+  o.state = DISPLAY[o.state] || o.state;
+  return o;
+};
 
-test('done 迁移 → playAnim + bubble 各一次', () => {
+test('running / idle 状态本身不提醒（只有 done、waiting 两种迁移才喊）', () => {
   const link = createPetLink();
   const m = mockPet();
   link.onSnapshot([row({ state: 'running' })], m, { now: T0, t });
@@ -350,7 +373,9 @@ test('pet.bubble 抛错不打死采集器（下一轮还得跑）', () => {
   assert.doesNotThrow(() => link.onSnapshot([row({ state: 'done' })], boom, { now: T0 + 2000, t }));
 });
 
-test('联动吃的是 aggregate 的输出（真实链路：done 落盘 → idle 行不触发 done 提醒）', () => {
+// 全链路：hook 落盘 → readSnapshots → aggregate → petLink。
+// 这条是「完成提醒」唯一的真实触发路径，DESIGN.md 的头号联动就靠它。
+test('全链路：done 落盘后宠物真的提醒（展示态是 idle 也照喊）', () => {
   const dir = tmp();
   const link = createPetLink();
   const m = mockPet();
@@ -358,13 +383,55 @@ test('联动吃的是 aggregate 的输出（真实链路：done 落盘 → idle 
   seed(dir, [rec({ sessionId: 'a', state: 'running', ts: T0 })]);
   let out = run(sf.readSnapshots(dir), { now: T0 });
   link.onSnapshot(out.rows, m, { now: T0, t });
-  // hook 写入 done → aggregate 推成 idle
+  assert.deepStrictEqual(m.calls, [], 'running 不提醒');
+  // hook 写入 done：展示态被推成 idle（灰、随后淡出），但联动必须按落盘态触发
   sf.writeStatus(rec({ sessionId: 'a', state: 'done', lastEvent: 'Stop', ts: T0 + 1000 }), dir);
   out = run(sf.readSnapshots(dir), { now: T0 + 2000 });
-  assert.strictEqual(out.rows[0].state, 'idle');
+  assert.strictEqual(out.rows[0].state, 'idle', '展示态：done/ended 一律显示为 idle');
+  assert.strictEqual(out.rows[0].raw, 'done', '落盘态原样带出，供联动判定迁移');
   link.onSnapshot(out.rows, m, { now: T0 + 2000, t });
-  assert.deepStrictEqual(m.calls, [],
-    'done 经 aggregate 变 idle，联动看的行状态里没有 done —— 这条锁死「完成提醒」的实际触发源');
+  assert.deepStrictEqual(m.calls, [
+    ['playAnim', 'receive-message'],
+    ['bubble', t('bubble.done', { project: 'demo' })]
+  ], '差事办完必须喊——只看展示态的话 done 永远被 idle 盖住，这个提醒就成了死代码');
+});
+
+test('全链路：waiting 落盘后只 bubble 不 playAnim', () => {
+  const dir = tmp();
+  const link = createPetLink();
+  const m = mockPet();
+  seed(dir, [rec({ sessionId: 'a', state: 'running', ts: T0 })]);
+  link.onSnapshot(run(sf.readSnapshots(dir), { now: T0 }).rows, m, { now: T0, t });
+  sf.writeStatus(rec({ sessionId: 'a', state: 'waiting', lastEvent: 'Notification', ts: T0 + 1000 }), dir);
+  const out = run(sf.readSnapshots(dir), { now: T0 + 2000 });
+  assert.strictEqual(out.rows[0].state, 'waiting');
+  link.onSnapshot(out.rows, m, { now: T0 + 2000, t });
+  assert.deepStrictEqual(m.calls, [['bubble', t('bubble.waiting', { project: 'demo' })]]);
+});
+
+test('ended（用户退出会话）不喊「差事办完啦」——那是关窗不是干完活', () => {
+  const dir = tmp();
+  const link = createPetLink();
+  const m = mockPet();
+  seed(dir, [rec({ sessionId: 'a', state: 'running', ts: T0 })]);
+  link.onSnapshot(run(sf.readSnapshots(dir), { now: T0 }).rows, m, { now: T0, t });
+  sf.writeStatus(rec({ sessionId: 'a', state: 'ended', lastEvent: 'SessionEnd', ts: T0 + 1000 }), dir);
+  const out = run(sf.readSnapshots(dir), { now: T0 + 2000 });
+  assert.strictEqual(out.rows[0].raw, 'ended');
+  link.onSnapshot(out.rows, m, { now: T0 + 2000, t });
+  assert.deepStrictEqual(m.calls, []);
+});
+
+test('unknown 行不触发任何联动（读不出来的会话绝不报完成）', () => {
+  const dir = tmp();
+  const link = createPetLink();
+  const m = mockPet();
+  fs.writeFileSync(path.join(dir, 'broken.json'), '{ 截断的', 'utf8');
+  const out = run(sf.readSnapshots(dir));
+  assert.strictEqual(out.rows[0].state, 'unknown');
+  assert.strictEqual(out.rows[0].raw, 'unknown');
+  link.onSnapshot(out.rows, m, { now: T0, t });
+  assert.deepStrictEqual(m.calls, []);
 });
 
 // ---- 7. 隔离自证 ----

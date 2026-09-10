@@ -879,3 +879,133 @@ claude-hook 22 + claude-installer 27 + state-files 20 = **69 全绿**，退出�
   自有字段撞名会被误去（实际不会发生）。
 
 <verification>PASS</verification>
+
+================================================================================
+## US-003 tool 采集器状态机与宠物联动 — DONE
+
+接的是上轮 implement agent 断连留下的 WIP（commit 8e664d0），非从零开始。
+判据：`scripts/ralph/criteria/US-003.md`（**根目录 criteria/ 已被上轮 WIP 删除**，
+现在 criteria 只剩 scripts/ralph/ 下这一份 —— 前几轮反复提的「两份分叉」问题
+就此消失，但 prd.json 的 `criteriaFile` 仍写作 `criteria/US-003.md` 这个相对路径，
+下轮按 `scripts/ralph/criteria/` 捞）。
+
+产出：lib/aggregate.js（补完）、lib/pet-link.js（改判据）、tool/index.js、
+tests/aggregate-test.js（31→34）、tests/tool-lifecycle-test.js（新建 19 条）。
+
+### 接手时的实际状态：WIP 是红的，不是绿的
+
+`lib/aggregate.js:89` 引用了**从未定义**的 `idleSince`，`node tests/aggregate-test.js`
+跑到第 7 条即 ReferenceError 崩掉。上轮 commit 信息说「语法已过」属实（node --check
+查不出未定义引用），但**语法过 ≠ 测试绿**，接手时先跑测试才发现。
+
+补 `idleSince(rec)`：done/ended 从 `ts` 起算 idle，running/waiting 熬过 20min 的
+从 `ts + IDLE_MS` 起算。不能都拿 ts 当起点 —— 后者若从 ts 算，一个刚满 20min 的
+running 会被判成「已 idle 20 分钟」当场移除，用户眼前的行凭空消失。
+
+### 本轮抓到的真实缺陷：完成提醒是死代码（不是纸面问题）
+
+**`aggregate` 把 done/ended 一律推成 idle，而 `pet-link` 按 `row.state` 判迁移，
+于是永远等不到 `done`** —— DESIGN.md「done → playAnim + bubble」这个头号联动
+在生产里一次都不会触发。
+
+复现（未改码前，node -e 实跑）：落盘 `state:'done'` 的记录喂完整链路，
+`aggregate` 输出行 `state` 为 `"idle"`；`pet-link` 的 `row.state !== 'done'` 直接 continue。
+
+更糟的是 WIP 测试里有一条 `联动吃的是 aggregate 的输出（真实链路：done 落盘 →
+idle 行不触发 done 提醒）`，**把这个缺陷当成正确行为断言下来了** —— 测试不但没拦住，
+还给它盖了章。
+
+**根因**：一个字段同时担「怎么显示」与「实际发生了什么」两个职责。展示态是有损的
+（done/ended → idle 多对一），下游要原始语义就再也还原不回来。
+**修法**：行结构里 `state`（展示态，panel 用）与 `raw`（落盘态，联动用）分开。
+unknown 行的 `raw` 显式写 `'unknown'`，不留空以免联动误判。
+`pet-link` 判据换成 `raw`，并保留 `raw` 缺失时回落 `state` 的兼容分支。
+
+`ended` 仍不触发完成提醒（`cur !== 'done'` 天然拦住）：SessionEnd 是关窗，不是干完活，
+喊「差事办完啦」是误报。已写成独立用例锁死。
+
+### 夹具同形性：同型缺陷第三次复发
+
+`pet-link` 单元用例的 `row()` 辅助函数造的是裸 `{state:'done'}`，而 aggregate 真实
+产出是 `{state:'idle', raw:'done'}` —— **夹具与被测上游的真实输出不同形**，
+所以 21 条联动测试全绿也没拦住上面那个缺陷。这是 US-001（临时文件形态不真实）、
+US-002（settings.json 排版形态不真实）之后的第三次同型复发。
+已把 `row()` 改成照真实产出造（done/ended 自动填 `state:'idle'` + `raw`），
+并新增 4 条**全链路**用例（真实落盘 → readSnapshots → aggregate → petLink）。
+
+### 排序：拒绝了 criteria §3 字面写法，以 DESIGN.md 为准
+
+WIP 那条 `criteria §3 场景` 用例期望 `[waiting, running, error, done]`，但它给的
+夹具时间戳里 done 比 error 更新。DESIGN.md 排序规则**只有两档**（waiting 置顶 /
+其余 ts 降序），没有「error 优先于 idle」这第三档；criteria §3 的
+`[waiting 置顶, running, done, error]` 是对**集合**的描述，不是对序的规定。
+按红线以 DESIGN.md 为准：把夹具两个 ts 对调使其自洽，另加一条
+`非 waiting 行只按 ts 降序，与状态无关` 把「没有状态优先级」正面锁死
+（反证 F：给 sortRows 偷加 error 优先级 → 转红）。
+
+### tests/tool-lifecycle-test.js（criteria §1 要求，WIP 完全没建）
+
+19 条，重点是宿主已知坑。mock 的 `scheduler.every` 刻意做成 async 且 `cancel`
+**只认自己发出去的 id**，采集器若不 await 就把 Promise 当 id 存下、cancel 拿到对象，
+当场记进 `badCancel` 判红 —— 探针不是「看代码里有没有 await」，是真的让它漏掉定时器。
+另覆盖：重复 start 不重复注册、start→stop→start 可重注册、cancel 抛错不留假 taskId、
+start 立刻跑一轮、tick 各类抛错（读目录/emit/坏文件/目录不存在）都不打死定时任务、
+activate/deactivate 闭环。
+
+还加了一条 **Proxy 探针**：记录采集器实际访问过的 `pet.*` 命名空间，断言只有
+`scheduler`/`events`/`pet` 三个 —— 碰到 sdk-surface.js 没给 tool 上下文的面就判红
+（插件形态红线的可执行版本，不靠人眼 review）。
+
+### 反证（判 DONE 的依据，不只看测试变绿）
+
+在 /tmp 的仓库副本上逐条改坏实现，副本基线先复现全绿（34 + 19）：
+
+| 反证 | 结果 |
+|---|---|
+| A 联动退回只看 `row.state`（本轮缺陷本身） | 转红 ✓ aggregate 13 条红 + lifecycle 2 条红 |
+| B `idleSince` 退回用 `ts` | 转红 ✓ aggregate 崩在第 8 条 |
+| C `start` 不 await `scheduler.every`（宿主已知坑） | 转红 ✓ lifecycle 4 条 FAILED |
+| D 重复 start 不去重 | 转红 ✓ lifecycle 1 条 |
+| E tick 去掉 try/catch | 转红 ✓ lifecycle 1 条 |
+| F sortRows 偷加 error 状态优先级 | 转红 ✓ aggregate 21 条红 |
+
+还原后基线复绿。
+
+### 门禁与隔离
+
+`node --check`：git 跟踪的全部 JS + 新建的 tool-lifecycle-test 全过。
+aggregate 34 + tool-lifecycle 19 + claude-hook 22 + claude-installer 27 +
+state-files 20 = **122 全绿**，退出码均 0。
+仓内那条「lib/ hooks/ tool/ 无中文字面量」扫描自动纳入了新建的 tool/ 目录并通过
+（US-001 设计的自动扩范围生效）。
+真实 `~/.local/state/pet-agent-status` 全程不存在（写成两个测试文件里的断言）；
+未联网、未起 Electron、未动宿主仓。
+
+### 三条红线核对
+
+- 插件形态：tool/ 与新增 lib/ 只 require `path` + 仓内相对模块；无 eval/new Function/
+  自更新/联网/正文采集。`require(path.join(LIB,...))` 是 `__dirname` + 常量文件名的
+  静态拼接（前几轮已裁定不构成「动态拼接 require」）。SDK 只用 scheduler/events/pet
+  三面，且已写成 Proxy 断言而非口头声明。PASS
+- 设计：排序规则、联动行为、状态图例（unknown 与 idle 文案必须不同词）均照 DESIGN.md；
+  本 story 无 panel UI 产出，视觉验收在 US-004。PASS
+- 协议：未改 PROTOCOL.md，schema 恒 1。**`raw` 只存在于内存快照行，绝不落盘** ——
+  写盘唯一入口仍是 `state-files.js#buildRecord` 的协议字段闭集，本轮未动。
+  推导态 error/idle/unknown 只活在 aggregate 与面板。PASS
+
+### 范围外观察（非 FAIL，留给后续）
+
+1. **`formOf(rec)` 读的是 `rec.form`，而 PROTOCOL.md 字段表里没有 `form` 这个字段**，
+   所以 `form` 恒为 `'cli'`。本轮属正确行为（Codex App 任务是二期，见 docs/prd.md
+   非目标），但 US-006 若要区分 App 形态，得先在 PROTOCOL.md 加字段再改这里 ——
+   别直接在 aggregate 里猜。
+2. unknown 行的 `project` 拿文件名顶替（正文都解析不出来，没有可信 project）。
+   US-004 渲染时注意这行的 project 可能是个 UUID 样的会话 id，视觉上要能接受。
+3. `deriveState` 里 error 判定优先于 idle，因此一个 pid 已死的老会话会长期停在
+   error 行不被 20min 规则移除（已写成用例锁死，是有意行为）。若真机上发现 error 行
+   堆积扰民，需监工定「error 行是否也该淡出」——criteria 没规定，本轮不擅自加。
+4. 前几轮记的仍有效：nvm 换 Node 版本后已装 hook 的 `execPath` 会静默失效而
+   `isInstalled` 查不出来（US-004 面板可补可执行性探测）；`detectTty` 每次
+   `readdirSync('/dev')` 全表扫（US-005 若跳转频繁可考虑缓存）。
+
+<story_completed>US-003</story_completed>
