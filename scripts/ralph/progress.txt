@@ -24,3 +24,106 @@ tests/state-files-test.js。
   后续 tool/hooks/panel 代码扩这个扫描范围即可。
 
 <story_completed>US-001</story_completed>
+
+## US-001 独立验证 — PASS
+
+```
+VERIFICATION REPORT - US-001
+node --check:        PASS (lib/state-files.js, lib/i18n.js, tests/state-files-test.js)
+state-files 测试:    PASS (18 passed, exit 0)
+manifest 契约核对:   PASS（宿主真实 loadManifest 加载通过 + 逐字段）
+损坏容错/路径清洗:   PASS（独立毒文件与穿越用例）
+i18n 零硬编码:       PASS
+Overall: PASS
+```
+
+验证方式与可观测证据（不复用实施 agent 的测试，另写 /tmp 脚本跑完已删）：
+
+- **manifest**：`require` 宿主 `demo/core/plugin-runtime/manifest.js` 的 `loadManifest(仓库根)`
+  真实加载通过，非按记忆比对。逐字段核：id/version/apiVersion/activation=opt-in、
+  kind=[tool,panel]、permissions=[storage,pet,ui,events,scheduler]、entry.tool=tool/index.js、
+  entry.panel{src=panel/panel.html,320x420,transparent=false(boolean)}、入口路径无 `..`/绝对路径。
+- **协议逐字段**：mkdtemp 目录写一条 running，读回实际 JSON =
+  `{"schema":1,"agent":"claude-code","sessionId":"sess-9","cwd":"/Users/me/work/alpha",
+  "project":"alpha","tty":"/dev/ttys011","pid":999,"state":"running",
+  "lastEvent":"SessionStart","ts":<毫秒>,"source":"hook"}`，10 个必填字段齐全，
+  ts 为整数毫秒且落在调用前后区间内，threadId 未传时不出现。
+- **原子性（比仓内测试更强的证据）**：仓内测试只断言"无 tmp 残留"，我另断言**覆盖写前后
+  inode 改变**——原地 writeFileSync 会保持 inode，inode 变说明确实走了 tmp+rename。实测变化。
+- **路径清洗**：六种输入（`../../etc/passwd`、`/etc/shadow`、`..`、`a\b`、`x y`、中文）全部
+  落在临时目录内，文件名匹配 `^[A-Za-z0-9._-]+\.json$`，`/etc/passwd.json`、`/etc/shadow.json`
+  均未生成。`..` 清洗成字面文件 `...json`（`..` + `.json`），仍在目录内，非穿越。
+- **损坏容错**：截断 JSON / `null` / 标量字符串 / 数字 / 子目录名以 .json 结尾 / 死符号链接 /
+  schema 0 / schema 2，八种毒物 readSnapshots 全不抛，各归 unknown 并带 reason
+  （`unparsable` / `not-an-object` / `schema-mismatch` / `schema-too-new`），
+  **无一条被映射成 done 记录**（PROTOCOL.md §采集器推导态 的硬要求）。
+- **i18n**：en 取词、未知 locale(`de`) 回落 zh-CN、en 缺词回落 zh-CN 同 key、`{project}` 插值、
+  zh/en key 集合一致；lib/ 剥注释后字符串字面量零中文（独立实现的扫描）。
+- **隔离**：真实 `~/.local/state/pet-agent-status` 全程不存在，未写 `~/.claude`、未联网、
+  未起 Electron（本仓 verify 常态），宿主仓只读 require 未修改。
+
+三条红线核对：
+- 插件形态：lib/ 只 require `fs`/`os`/`path`（属 README 权限披露内的状态目录读写用途）；
+  无 eval/new Function/动态拼接 require/自更新/正文采集。PASS
+- 设计：本 story 无 UI 产出，不适用（DESIGN.md 验收在 US-004）。
+- 协议：schema:1 实现与 PROTOCOL.md 逐行一致，未改协议文件。PASS
+
+范围外观察（不构成 FAIL，留给后续 story）：
+- `manifest.entry.tool` 指向尚不存在的 `tool/index.js`。已确认宿主 loadManifest 只做字符串
+  类型与越界校验、不检查文件存在（入口在 runtime.js 加载期解析），故骨架先声明后补文件合规；
+  真实 require 失败风险由 US-003 交付 tool/index.js 消除。
+- criteria 第 14 行要求 `tool/panel/hooks` 中文 grep 零命中：这三个目录本 story 尚未创建，
+  条件空真。仓内那条扫描目前只覆盖 lib/，US-002 起需按 knowledge.md 已记的办法扩范围。
+- `validateRecord` 未校验 `state` 与 `agent` 之外的取值组合、也未限制 cwd 必须绝对路径
+  （PROTOCOL.md 字段表写了"绝对路径"但未要求写入方校验）。criteria 未要求，属更严做法。
+
+<verification_passed>US-001</verification_passed>
+
+## US-001 返工（codex FAIL 修复）— DONE (commit 07ed3e1)
+
+上轮双轨 codex 判 FAIL、仲裁 UPHELD，缺口属实，已修。
+
+**缺陷**：`readSnapshots` 第 104 行用 `name.startsWith('.tmp-')` 过滤临时文件。但
+PROTOCOL.md 的 sessionId 白名单 `[A-Za-z0-9._-]` 允许 ID 以 `.tmp-` 开头，
+`sanitizeSessionId('.tmp-session')` 原样放行、写成正式文件 `.tmp-session.json`，
+读侧却把它跳过 —— 该会话永远进不了快照，且 **不计入 unknown**（静默丢失、无诊断）。
+写—读闭环自相矛盾，踩协议红线。
+
+**根因（仲裁点破的关键事实）**：临时文件名是 `.tmp-<id>-<pid>-<rand>`，**本就不带
+`.json` 后缀**，所以同一行的 `endsWith('.json')` 已经足以滤掉全部真实临时文件。
+`startsWith('.tmp-')` 对临时文件是死代码，唯一的实际效果就是误杀合法会话 ——
+没有任何正当收益抵消这个缺口。
+
+**修法**：不是在读侧打补丁做例外，而是消除两种文件的命名歧义 ——
+- 写侧临时文件显式补 `.tmp` 后缀（`.tmp-<id>-<pid>-<rand>.tmp`）；
+- 读侧过滤依据单一化为「后缀是不是 `.json`」，删掉前缀判断。
+两类文件在后缀维度天然互斥，不再靠前缀猜。
+
+**证据**：
+- 按 codex 报告原样复现（schema:1 必填齐全、sessionId=`.tmp-session`）：
+  修前 `{records:0, unknownCount:0}`，修后 `records:1 / unknownCount:0`，
+  记录字段与协议逐项一致，`readStatus('.tmp-session')` 也能命中。
+- 原子性未被改动破坏：覆盖写前后 **inode 变化**（证明真走 tmp+rename），目录无残留。
+- manifest 仍经宿主真实 `loadManifest` 加载通过。
+- 门禁：`node --check` 全过；`node tests/state-files-test.js` **20 passed**（18 → 20）。
+- 隔离：真实 `~/.local/state/pet-agent-status` 全程不存在；未联网、未起 Electron、未动宿主。
+
+**测试补强**：
+- 新增「合法 `.tmp-` 会话可写入并读回」回归用例（锁死本次缺陷）。
+- 新增「真临时文件与 `.tmp-` 会话同目录共存时各归各位」用例（防修复走偏成另一种误判）。
+- 修正原「忽略临时文件」用例：它原先造的是 `.tmp-halfway.json`，**与 writeStatus 真实
+  产出不同形**（真临时文件不带 `.json`），等于在测一个现实中不存在的形态 —— 这正是
+  上轮缺陷能溜过测试的原因。已改为与真实产出同形的 `.tmp-halfway-123-abcdef.tmp`。
+
+**知识沉淀（供后续 story）**：临时/正式文件的区分**只按 `.json` 后缀**，任何地方都不许
+再用 `.tmp-` 前缀判定文件性质 —— 前缀是协议允许的合法 ID 内容，不是文件类型标记。
+
+**提交卫生备注**：提交时监工的 fixtures 提交（Codex hooks 事实）与本次改动撞车，
+一度把两者混进同一个 commit。已 soft reset 拆回两个干净提交：
+`abb7290` 只含监工的 6 个 fixtures 文件（消息与作者原样保留），
+`07ed3e1` 只含本 story 的 `lib/state-files.js` + `tests/state-files-test.js`。
+
+**范围外观察**：`fixtures/codex-hooks-facts.md` 已由监工提供（Codex CLI 0.153.4 实测），
+US-006 的前置门已解锁，可在后续轮次开工（本轮未动，不越界）。
+
+<story_completed>US-001</story_completed>

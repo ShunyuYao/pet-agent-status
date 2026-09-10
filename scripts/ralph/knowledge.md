@@ -32,3 +32,15 @@
   PROTOCOL.md，hook 侧只写 running/waiting/done/ended 四种，推导态归采集器。
 - Codex CLI 的 hooks 机制**待监工本机实测**（`fixtures/codex-hooks-facts.md`）；该文件不存在时
   US-006 不许开工（防照猫画虎写出对不上真实事件名的实现）。
+  > 2026-09-10 更新：该文件与 `fixtures/codex-events/*.json` 实录夹具已由监工提供
+  > （Codex CLI 0.153.4，commit abb7290），US-006 前置门**已解锁**。
+
+## 状态文件命名铁律（US-001 返工换来的，别再踩）
+
+- 状态目录里区分「正式状态文件」与「写入中的临时文件」**只按 `.json` 后缀**：
+  正式 = `<sanitizedSessionId>.json`；临时 = `.tmp-<id>-<pid>-<rand>.tmp`（不带 `.json`）。
+- **任何地方都不许用 `.tmp-` 前缀判定文件性质**。`.tmp-` 是 PROTOCOL.md 白名单
+  `[A-Za-z0-9._-]` 允许的合法 sessionId 内容，不是文件类型标记 —— 靠前缀过滤会把
+  `.tmp-session` 这种真会话静默吃掉（records 少一条且 unknownCount 为 0，无诊断）。
+- 推论（写测试时注意）：夹具里造临时文件必须与 `writeStatus` **真实产出同形**（`.tmp` 结尾）。
+  上轮缺陷之所以溜过 18 条测试，就是因为夹具造的 `.tmp-halfway.json` 是现实中不存在的形态。
