@@ -265,3 +265,109 @@ command 都会写上同一个 MARKER，于是卸载会把别人的条目一并�
   语义是「最近一次改动前的样子」，不是历史链。criteria 未要求多份。
 
 <story_completed>US-002</story_completed>
+
+## [verify] US-002 Claude Code hooks 一键接入 —— FAIL（第 2 轮验证）
+
+VERIFICATION REPORT - US-002
+node --check:            PASS（hooks/ lib/ tests/ 全部文件）
+仓内测试:                PASS（claude-hook 21 / claude-installer 15 / state-files 20，退出码均 0）
+hook 事件映射:           PASS（7 事件经 stdin 实测逐一命中）
+静默失败保护:            PASS（8 类坏输入 + 目录不可写，退出 0、stdout/stderr 零字节）
+tty 采集:                PASS（真实 pty 实测，见下）
+安装器幂等/身份判据:     PASS
+备份「已存在不覆盖首份」: **FAIL**
+卸载后逐字节还原:        **FAIL**
+Overall: FAIL
+
+### 独立复验做了什么（不复用实施 agent 的脚本，/tmp 自写，跑完已删）
+
+1. spawn hook 喂 Notification / Stop 夹具 → cat 状态文件：state=waiting / done，
+   rc=0，stdout 0 字节、stderr 0 字节。落盘 JSON 无协议外字段。
+2. **真实 pty 实测 tty 采集**（python3 `pty.openpty()` 把 hook 的 stdout 接到 pty slave）：
+   落盘 `tty:"/dev/ttys020"`，与 `os.ttyname(slave)` 完全一致 —— fstat-rdev 反查这条路
+   在 macOS 上真的通，不是死代码；管道场景下写 null 不猜。PASS
+3. 含用户自有 hook 的 settings.json 夹具 install → uninstall → diff。
+4. 身份判据两支：抹掉 marker 字段后 uninstall 仍 removed=7（认 command）；
+   「同 marker 异 command」条目 removed=0 且原样保留。PASS
+
+### FAIL 1 — 备份违反 criteria §2「已存在不覆盖首份」
+
+`lib/claude-hooks-installer.js:73-78` 的 `backup()` 无条件 `copyFileSync` 覆盖。
+criteria §2 原文要求「写前复制原文件为 `.bak-pet-agent-status`（**已存在不覆盖首份**）」，
+代码与注释（`:71-72`「重复安装会用当前内容刷新备份」）是刻意反着做的。
+
+可观测失败场景（实测）：
+- 原文 `{model:opus, hooks:{Stop:[用户自己的 /u/mine.sh]}}`
+- 用户点「一键接入」→ 备份 = 接入前原文（对）
+- 用户**再点一次**「一键接入」→ 备份被刷成「已含本插件 7 条钩子」的版本
+- 用户想回滚，`cp settings.json.bak-pet-agent-status settings.json`
+  → 恢复后 `isInstalled()` 仍为 **true**，hooks 里 7 条本插件条目全在
+  → 备份丧失「回滚到接入前」这个唯一用途，且用户无从察觉
+
+上一轮验证把这条记进「范围外观察」并以「criteria 未要求多份」放过 —— 判断有误：
+criteria 要的不是多份历史，而是「首份不被覆盖」，恰恰就是防上面这个场景。
+
+修复方向（供实施 agent 参考，不在本报告内改码）：`backup()` 里
+`if (fs.existsSync(dest)) return dest;` 先行返回；并补一条测试断言
+「install 两次后备份内容 === 首次安装前原文」。
+
+### FAIL 2 — 卸载后并非「逐字节还原」，只是语义还原
+
+criteria §3 明确要求「install → uninstall → `diff` 断言与原文件**逐字节一致**」。
+`writeSettings()`（`:59-69`）恒定用 `JSON.stringify(data, null, 2) + '\n'` 重写整个文件，
+不保留原文的缩进宽度、`"key" : value` 风格、紧凑写法或末尾换行。
+
+实测五种原文风格（install→uninstall 后）：
+| 原文风格 | 逐字节 | 语义 |
+|---|---|---|
+| 2 空格 + 末尾换行 | 一致 | 一致 |
+| 4 空格 | **不同** | 一致 |
+| tab 缩进 | **不同** | 一致 |
+| 紧凑单行 | **不同** | 一致 |
+| 无末尾换行 | **不同** | 一致 |
+
+键序与语义在所有分支都正确保住了（deepStrictEqual 通过、顶层与 hooks 键序不变），
+问题纯在排版重写。
+
+**这不是纸面洁癖**：本机真实 `~/.claude/settings.json` 就是 Claude Code 自己写出的
+`"alwaysThinkingEnabled" : false` 风格（**冒号前有空格**）。用同风格复刻夹具实测：
+install→uninstall 后 21 行变 27 行、**25 行内容不同**。用户 git 管理 dotfiles 的话，
+点一次接入再卸载会得到一个整文件重排的 diff，且此后 Claude Code 每次改配置又会写回
+它自己的风格，来回抖动。
+
+仓内 `tests/claude-installer-test.js:143-149` 之所以绿，是因为夹具用
+`JSON.stringify(content, null, 2)` 播种（`:49`）—— 恰好只命中 `writeSettings` 唯一会输出的
+那一种风格。**夹具与被测实现同源**，等于断言恒真。这正是 knowledge.md 里
+US-001 那条教训（「夹具造的形态现实中不存在」）的同型复发：
+上轮是临时文件形态不真实，这轮是 settings.json 排版形态不真实。
+
+修复方向（二选一，实施 agent 定）：
+- (a) 真做到逐字节：探测原文缩进（宽度/tab）与末尾换行并回放；`"key" : value` 这类
+  风格差异 `JSON.stringify` 无论如何回放不了，需保留原文做 surgical 文本编辑，成本高。
+- (b) 认为逐字节不现实 → **先改 criteria/US-002.md 把要求降为「语义等价 + 键序保持」**，
+  交监工确认后再判 PASS。不要留着 criteria 说逐字节、实现只做语义、测试用同源夹具
+  自证的三方错位。
+  ——本 agent 倾向 (b)：JSON 排版无损往返对一个状态指示器插件性价比太低；
+  但**这是改验收标准，必须监工点头，验证 agent 无权自行放宽**。
+  同时建议把测试夹具换成非 2 空格风格，让断言不再恒真。
+
+### 三条红线核对
+
+- 插件形态：PASS。hook 只 require Node 内建（path/fs/os/tty）+ 仓内 lib；
+  无 eval/new Function/动态拼接 require/自更新/网络。fs 与 child_process 用途都在
+  README 权限披露表内。测试断言 prompt 正文（"修个 bug"）不落盘、协议外字段为零。
+- 设计：本 story 无 UI 产出，不适用。
+- 协议：PASS。映射表七行与 PROTOCOL.md 逐行一致，schema 恒 1，未改协议文件。
+
+### 范围外观察（非 FAIL）
+
+- 插件目录含 ASCII 空格时 hook 会挂：`hookCommand()`（`:26-28`）裸空格拼
+  `"<node> <script>"`，实测在含空格路径下经 shell 执行 rc=1 并向 stderr 吐
+  MODULE_NOT_FOUND 堆栈 —— 违反「绝不打扰会话」的初衷。当前宿主 userData 路径
+  （`~/Library/Application Support/吐梨邦/plugins/`）虽含空格，但插件子目录名由
+  manifest id 决定，实际是否触发要看宿主装插件的落地路径，本仓库判不了。
+  criteria 未提引号，故不判 FAIL；建议给两段路径加引号（成本一行）。
+- 上一轮记的两条仍有效：`PermissionRequest` 可能比 `Notification` 更准；
+  nvm 换 Node 版本后已装 hook 的 `execPath` 会静默失效而 `isInstalled` 查不出来。
+
+<verification>FAIL</verification>
