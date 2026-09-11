@@ -10,6 +10,7 @@ const LIB = path.join(__dirname, '..', 'lib');
 const stateFiles = require(path.join(LIB, 'state-files.js'));
 const { aggregate } = require(path.join(LIB, 'aggregate.js'));
 const { createPetLink } = require(path.join(LIB, 'pet-link.js'));
+const { createBadgeLink } = require(path.join(LIB, 'badge.js'));
 const { createNodeI18n } = require(path.join(LIB, 'i18n.js'));
 const installer = require(path.join(LIB, 'claude-hooks-installer.js'));
 const codexInstaller = require(path.join(LIB, 'codex-hooks-installer.js'));
@@ -55,6 +56,7 @@ function createCollector(deps) {
   const t = typeof d.t === 'function' ? d.t : i18n.t;
   const locale = d.locale || i18n.locale;
   const link = createPetLink({ playAnimGuard: d.playAnimGuard });
+  const badgeLink = createBadgeLink();
   // 缺省 undefined → installer 自己走 settingsPath()（即 PET_AS_CLAUDE_SETTINGS 覆盖）；
   // 测试注入临时文件，绝不碰真实 ~/.claude/settings.json
   const installOpts = d.settingsFile ? { settingsFile: d.settingsFile } : undefined;
@@ -148,6 +150,9 @@ function createCollector(deps) {
       // 哪怕钩子早就装好了。读一个小 JSON，2s 一次的开销可以忽略。
       pushInstallState(pet);
       link.onSnapshot(result.rows, pet, { now: at, t });
+      // 折叠徽标（宿主 pet.badge.*）：数据取自同一份 summary，协议零改动。
+      // 不 await：徽标失败不该拖慢/打断本轮采集，内部已自带 try/catch 与降级。
+      void badgeLink.onSummary(result.summary, pet);
       return result;
     } catch (_) {
       return lastSnapshot;   // 本轮读坏了就沿用上轮，面板不闪空
@@ -209,6 +214,8 @@ function createCollector(deps) {
     const id = taskId;
     taskId = null;   // 先清再 cancel：cancel 失败也不该留个假 id 挡住下次 start
     try { await pet.scheduler.cancel(id); } catch (_) { /* 宿主已经收走了 */ }
+    // 正常停用时自己把徽标撤干净（宿主虽有兜底清除，但那是给异常路径的）
+    await badgeLink.dispose(pet);
   }
 
   return {

@@ -457,11 +457,17 @@ const GUARD_BEFORE = guardSnapshot(GUARD_PATHS);
     clock = T0 + 2000;
     m.state.every[0].fn();
     await c.stop(spy);
-    const allowed = new Set(['scheduler', 'events', 'pet']);
+    // badge 自 0.3.0 起使用（宿主 0.19.0 的 pet.badge.*，experimental 档）。
+    // 这份白名单是 AGENTS.md 插件形态红线的守卫：新增 SDK 面必须**同时**更新它与 README
+    // 的能力披露，不许靠放宽断言蒙混——它刚刚真的拦下了一次未登记的新面。
+    const allowed = new Set(['scheduler', 'events', 'pet', 'badge']);
     for (const ns of touched) {
       assert.ok(allowed.has(ns), `碰了未披露的 SDK 面 pet.${ns}（AGENTS.md 插件形态红线）`);
     }
-    assert.deepStrictEqual([...touched].sort(), ['events', 'pet', 'scheduler']);
+    // 宿主不支持 badge 时（mock 没造 badge）不会被 touched 记到，故只断言下界
+    for (const must of ['events', 'pet', 'scheduler']) {
+      assert.ok(touched.has(must), `采集器应当使用 pet.${must}`);
+    }
   });
 
   // ---- 6. 隔离自证 ----

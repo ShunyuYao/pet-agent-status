@@ -18,6 +18,9 @@
 | `child_process` spawn `ps` | 按会话的 tty 反查它属于哪个终端 App（决定这一行能否跳转） | 只读进程表，10 秒缓存 |
 | `child_process` spawn `osascript` | 点击会话行时聚焦 iTerm2 / Terminal.app 对应窗口标签页 | 仅跳转动作时 |
 
+另使用宿主 SDK：`storage` `pet`（bubble/playAnim/speak）`pet.badge`（宠物脚下折叠徽标，
+需宿主 ≥0.19.0，老宿主自动降级）`ui`（面板开关）`events` `scheduler`。
+
 **不采集也不上传任何对话内容**；状态文件只含任务标识、目录名、状态与时间戳。
 无遥测、无自更新、无远程资源。
 
