@@ -348,3 +348,45 @@ test('form 选填字段：合法值写入、非法值不写、读回校验（PRO
 
 for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
 console.log(`\nstate-files-test: ${passed} passed`);
+
+// ---- since：活跃段起点（2026-09-11 修「工具调用把 mm:ss 计时归零」缺陷）----
+
+test('活跃组内 since 继承首次，不被后续事件刷新（计时不归零）', () => {
+  const dir = tmp();
+  const base = { schema: 1, agent: 'claude-code', sessionId: 's', cwd: '/x', project: 'p', tty: null, pid: 1 };
+  const t0 = 1000000;
+  sf.writeStatus({ ...base, state: 'running', lastEvent: 'UserPromptSubmit', ts: t0 }, dir);
+  sf.writeStatus({ ...base, state: 'running', lastEvent: 'PreToolUse', ts: t0 + 60000 }, dir);
+  sf.writeStatus({ ...base, state: 'waiting', lastEvent: 'Notification', ts: t0 + 90000 }, dir);
+  const rec = sf.readSnapshots(dir).records[0];
+  assert.strictEqual(rec.since, t0, 'running→PreToolUse→waiting 全在活跃组，since 应保持首次');
+  assert.strictEqual(rec.ts, t0 + 90000, 'ts 仍是最后心跳（stale/error 推导要用它）');
+});
+
+test('离开活跃组再回来，since 重置为新起点', () => {
+  const dir = tmp();
+  const base = { schema: 1, agent: 'claude-code', sessionId: 's', cwd: '/x', project: 'p', tty: null, pid: 1 };
+  const t0 = 1000000;
+  sf.writeStatus({ ...base, state: 'running', lastEvent: 'UserPromptSubmit', ts: t0 }, dir);
+  sf.writeStatus({ ...base, state: 'done', lastEvent: 'Stop', ts: t0 + 50000 }, dir);
+  sf.writeStatus({ ...base, state: 'running', lastEvent: 'UserPromptSubmit', ts: t0 + 200000 }, dir);
+  assert.strictEqual(sf.readSnapshots(dir).records[0].since, t0 + 200000, '新一轮应重新起算');
+});
+
+test('旧文件没有 since 时读得出来（schema:1 加法，向后兼容）', () => {
+  const dir = tmp();
+  const legacy = { schema: 1, agent: 'claude-code', sessionId: 'old', cwd: '/x', project: 'p', tty: null, pid: 1, state: 'running', lastEvent: 'PreToolUse', ts: 1000000 };
+  fs.writeFileSync(path.join(dir, 'old.json'), JSON.stringify(legacy));
+  const snap = sf.readSnapshots(dir);
+  assert.strictEqual(snap.records.length, 1, '缺 since 的旧文件不该被当成损坏');
+  assert.strictEqual(snap.records[0].since, undefined);
+});
+
+test('since 非数字时判损坏（不接受垃圾值）', () => {
+  const dir = tmp();
+  const bad = { schema: 1, agent: 'claude-code', sessionId: 'b', cwd: '/x', project: 'p', tty: null, pid: 1, state: 'running', lastEvent: 'X', ts: 1, since: 'nope' };
+  fs.writeFileSync(path.join(dir, 'b.json'), JSON.stringify(bad));
+  const snap = sf.readSnapshots(dir);
+  assert.strictEqual(snap.records.length, 0);
+  assert.strictEqual(snap.unknown.length, 1);
+});

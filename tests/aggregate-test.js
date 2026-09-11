@@ -261,6 +261,26 @@ test('running 行时间显 mm:ss，完成行显相对时间', () => {
   assert.strictEqual(d.timeText, t('time.minutesAgo', { n: 4 }));
 });
 
+// 缺陷回归（2026-09-11「计时突然归零」）：同会话第二笔活跃写入继承 since，
+// mm:ss 从活跃段起点连续计；非活跃行的相对时间仍以最后动静（ts）为准。
+test('心跳重写后 mm:ss 从 since 连续计时，不从新 ts 归零', () => {
+  const dir = tmp();
+  // 真实通道：同一会话先后两笔 running（第二笔 = 任务中的工具调用心跳）
+  sf.writeStatus(rec({ sessionId: 'r', state: 'running', ts: T0 - 5 * MIN }), dir);
+  sf.writeStatus(rec({ sessionId: 'r', state: 'running', lastEvent: 'PreToolUse', ts: T0 - 10 * 1000 }), dir);
+  const row = run(sf.readSnapshots(dir)).rows[0];
+  assert.strictEqual(row.state, 'running');
+  assert.strictEqual(row.timeText, '05:00', '计时起点应是活跃段起点，不是最后心跳');
+});
+
+test('done 行的相对时间仍按最后动静（ts），不受历史 since 影响', () => {
+  const dir = tmp();
+  sf.writeStatus(rec({ sessionId: 'd', state: 'running', ts: T0 - 10 * MIN }), dir);
+  sf.writeStatus(rec({ sessionId: 'd', state: 'done', lastEvent: 'Stop', ts: T0 - 3 * MIN }), dir);
+  const row = run(sf.readSnapshots(dir)).rows[0];
+  assert.strictEqual(row.timeText, t('time.minutesAgo', { n: 3 }));
+});
+
 test('不足 1 分钟的完成行显「刚刚」', () => {
   const dir = tmp();
   const snap = seed(dir, [rec({ sessionId: 'd', state: 'done', lastEvent: 'Stop', ts: T0 - 20 * 1000 })]);

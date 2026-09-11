@@ -226,7 +226,7 @@ test('落盘记录字段集合恰好是 PROTOCOL.md 字段表（含 threadId，�
   assert.ok(rec.tty === null || /^\/dev\/ttys?[a-z0-9]+$/i.test(rec.tty), `tty 形态异常: ${rec.tty}`);
   assert.ok(rec.pid === null || Number.isFinite(rec.pid));
 
-  const allowed = new Set(sf.REQUIRED.concat(['threadId', 'source']));
+  const allowed = new Set(sf.REQUIRED.concat(['threadId', 'source', 'since']));
   for (const k of Object.keys(rec)) assert.ok(allowed.has(k), `协议外字段: ${k}`);
   // 经 state-files 自己的校验器复核一遍（读侧认不认才算数）
   assert.strictEqual(sf.validateRecord(rec), null);

@@ -111,7 +111,7 @@ test('落盘记录字段齐全且符合 PROTOCOL.md schema:1', () => {
   }
   // 未在协议里的字段不许乱写（会话正文尤其不许采集）
   const extra = Object.keys(rec).filter((k) => ![
-    'schema', 'agent', 'sessionId', 'cwd', 'project', 'tty', 'pid', 'state', 'lastEvent', 'ts', 'threadId', 'source'
+    'schema', 'agent', 'sessionId', 'cwd', 'project', 'tty', 'pid', 'state', 'lastEvent', 'ts', 'threadId', 'source', 'since'
   ].includes(k));
   assert.deepStrictEqual(extra, [], `写入了协议外字段: ${extra.join(',')}`);
   assert.ok(!JSON.stringify(rec).includes('修个 bug'), '绝不采集会话正文（prompt 内容）');
@@ -206,6 +206,41 @@ test('恶意 session_id 被清洗，不穿越出状态目录', () => {
   assert.strictEqual(files.length, 1);
   assert.ok(/^[A-Za-z0-9._-]+\.json$/.test(files[0]), `文件名未清洗: ${files[0]}`);
   assert.ok(!fs.existsSync('/etc/passwd.json'), '绝不许写到目录外');
+});
+
+// ---- 5.5 缺陷回归（2026-09-11 用户实测「计时突然归零」）：since 只在活跃段起点定一次 ----
+// 根因：每个 hook 事件都整文件重写、ts 取写入时刻，面板 mm:ss 用 now-ts 计时，
+// 于是每次工具调用（PreToolUse）都把计时打回 00:00。修法：协议加选填 since（活跃段起点），
+// 同处活跃组（running/waiting）的后续事件继承之，离开活跃组再回来才重置。
+test('工具调用/权限等待/批准恢复都不重置 since；新一轮任务才重置', () => {
+  const dir = tmp();
+  const base = fixtureOf('user-prompt-submit.json');
+  const ev = (name) => Object.assign({}, base, { hook_event_name: name, session_id: 'since-seq' });
+  const pause = (ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms); };
+
+  runHook(ev('UserPromptSubmit'), dir);
+  const first = readOnly(dir);
+  assert.strictEqual(first.since, first.ts, '活跃段第一笔：since 从本次 ts 起算');
+
+  pause(15); runHook(ev('PreToolUse'), dir);
+  const afterTool = readOnly(dir);
+  assert.ok(afterTool.ts > first.ts, '心跳 ts 应随事件刷新');
+  assert.strictEqual(afterTool.since, first.since, '工具调用不得重置计时起点（本缺陷主症状）');
+
+  pause(15); runHook(ev('Notification'), dir);
+  assert.strictEqual(readOnly(dir).since, first.since, 'running→waiting 继承 since');
+
+  pause(15); runHook(ev('PostToolUse'), dir);
+  assert.strictEqual(readOnly(dir).since, first.since, '批准后恢复 running 继承 since');
+
+  pause(15); runHook(ev('Stop'), dir);
+  const doneRec = readOnly(dir);
+  assert.ok(!('since' in doneRec), '离开活跃组（done）不写 since');
+
+  pause(15); runHook(ev('UserPromptSubmit'), dir);
+  const next = readOnly(dir);
+  assert.strictEqual(next.since, next.ts, '新一轮任务：since 重置为新起点');
+  assert.ok(next.since > first.since, '新起点晚于上一段');
 });
 
 // ---- 6. 隔离自证：全程没碰真实状态目录 ----
