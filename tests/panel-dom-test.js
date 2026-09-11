@@ -58,12 +58,16 @@ function mountPanel(opts) {
   const handlers = new Map();
   const emitted = [];
   const closed = [];
+  const copied = [];
   const petMock = {
     events: {
       on(name, fn) { handlers.set(name, fn); },
       emit(name, data) { emitted.push({ name, data }); }
     },
-    ui: { closePanel() { closed.push(true); } }
+    // noCopyText：模拟「宿主没有 ui.copyText」的旧宿主，验面板不炸（同 badge 的降级测法）
+    ui: o.noCopyText
+      ? { closePanel() { closed.push(true); } }
+      : { closePanel() { closed.push(true); }, copyText(s) { copied.push(s); } }
   };
   const dom = new JSDOM(html, {
     runScripts: 'dangerously',
@@ -78,7 +82,7 @@ function mountPanel(opts) {
   });
   const doc = dom.window.document;
   return {
-    dom, doc, emitted, closed,
+    dom, doc, emitted, closed, copied,
     push(name, data) {
       const fn = handlers.get(name);
       assert.ok(fn, `panel 没有订阅事件 ${name}`);
@@ -124,14 +128,31 @@ test('内联 script 通过 node --check', () => {
 
 // ================= 2. 无外部依赖 / 设计红线（静态） =================
 
+// 红线禁的是「**加载**远程资源」，不是「字面上出现 URL 字符」。两处豁免各有理由，
+// 且都补了「它确实没被当成加载目标」的正面断言 —— 只放进白名单不验用法，等于把守卫挖空。
+const URL_ALLOWLIST = [
+  'http://www.w3.org/2000/svg',                    // XML 规范要求的命名空间标识符，不是请求
+  'https://github.com/ShunyuYao/pet-agent-status', // 「关于」区展示给用户看的仓库地址（纯文本 + copyText）
+];
+
 test('panel.html 零远程资源、零框架', () => {
-  // 注释里也不许留 URL（criteria §2「grep 零命中」）
+  // 注释里也不许留 URL（criteria §2「grep 零命中」），白名单外一律零命中
   const hits = html.match(/https?:\/\/[^\s"'<>]+/g) || [];
-  // SVG 命名空间是 XML 规范要求的标识符，不是网络请求
-  const remote = hits.filter((u) => u !== 'http://www.w3.org/2000/svg');
+  const remote = hits.filter((u) => !URL_ALLOWLIST.includes(u));
   assert.deepStrictEqual(remote, [], `panel.html 出现远程 URL: ${remote.join(', ')}`);
   assert.ok(!/<script[^>]+src=/i.test(html), 'panel 不得引用外部 script');
   assert.ok(!/<link[^>]+rel=["']?stylesheet/i.test(html), 'panel 不得引用外部样式表');
+});
+
+test('仓库地址只是展示文本，从不作为加载/导航目标', () => {
+  // 光把它加进白名单证明不了安全：真正要防的是有人日后把它写成 <a href>/fetch/src。
+  // 宿主 panel 窗没有 setWindowOpenHandler，<a href> 点了也打不开 —— 那是个假入口，
+  // 比不做更糟，所以这里直接把「出现在任何加载/导航属性里」判为失败。
+  const repo = 'https://github.com/ShunyuYao/pet-agent-status';
+  const asAttr = new RegExp(`(?:href|src|action|formaction)\\s*=\\s*["']?${repo.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}`, 'i');
+  assert.ok(!asAttr.test(html), '仓库地址不得出现在 href/src 等加载属性里（宿主打不开，是假入口）');
+  assert.ok(!new RegExp(`fetch\\s*\\(\\s*["']${repo}`).test(html), '仓库地址不得用于 fetch');
+  assert.ok(/copyText\s*\(\s*REPO_URL\s*\)/.test(html), '仓库地址应经 ui.copyText 交给用户');
 });
 
 test('DESIGN.md token 色值逐个出现在 panel.html', () => {
@@ -692,6 +713,52 @@ test('⚙ 打开设置：列表/空态隐藏、设置组可见；再点回列表
   p.$('#gear').dispatchEvent(new p.dom.window.Event('click'));
   assert.strictEqual(p.$('#settings').hidden, true);
   assert.strictEqual(p.$('#list').hidden, false, '关掉设置要回列表');
+  p.close();
+});
+
+test('设置视图带「关于」区：展示仓库地址与 Star 号召', () => {
+  const p = mountPanel();
+  p.$('#gear').dispatchEvent(new p.dom.window.Event('click'));
+  assert.strictEqual(p.$('#about').hidden, false, '设置视图里应有「关于」区');
+  assert.strictEqual(p.$('#about-url').textContent,
+    'https://github.com/ShunyuYao/pet-agent-status', '仓库地址要原样展示，用户能照抄');
+  assert.ok(/Star/i.test(p.$('#about-star').textContent), '应有 Star 号召文案');
+  // 「关于」属于设置视图，不该在列表态露出来
+  p.$('#gear').dispatchEvent(new p.dom.window.Event('click'));
+  assert.strictEqual(p.$('#settings').hidden, true);
+  p.close();
+});
+
+test('点「复制地址」→ 经 ui.copyText 把仓库地址交给用户，按钮翻成已复制', () => {
+  const p = mountPanel();
+  p.$('#gear').dispatchEvent(new p.dom.window.Event('click'));
+  const btn = p.$('#about-copy');
+  assert.strictEqual(btn.textContent, '复制地址');
+  btn.dispatchEvent(new p.dom.window.Event('click'));
+  // 断言用户可观测结果：剪贴板真收到了地址 + 按钮给了确认反馈
+  assert.deepStrictEqual(p.copied, ['https://github.com/ShunyuYao/pet-agent-status']);
+  assert.strictEqual(btn.textContent, '已复制 ✓');
+  assert.ok(btn.classList.contains('is-done'));
+  p.close();
+});
+
+test('宿主没有 ui.copyText 时点复制不炸，也不谎报「已复制」', () => {
+  // 假成功比失败更糟：用户以为地址在剪贴板里，粘出来是别的东西。
+  const p = mountPanel({ noCopyText: true });
+  p.$('#gear').dispatchEvent(new p.dom.window.Event('click'));
+  const btn = p.$('#about-copy');
+  btn.dispatchEvent(new p.dom.window.Event('click'));
+  assert.strictEqual(btn.textContent, '复制地址', '没真复制就不该翻成「已复制」');
+  assert.ok(!btn.classList.contains('is-done'));
+  p.close();
+});
+
+test('英文环境下「关于」区走 en 词表', () => {
+  const p = mountPanel({ language: 'en-US' });
+  p.$('#gear').dispatchEvent(new p.dom.window.Event('click'));
+  assert.strictEqual(p.$('#about-label').textContent, 'About this plugin');
+  assert.ok(/star/i.test(p.$('#about-star').textContent));
+  assert.strictEqual(p.$('#about-copy').textContent, 'Copy link');
   p.close();
 });
 

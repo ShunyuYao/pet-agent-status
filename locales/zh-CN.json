@@ -1,4 +1,8 @@
 {
+  "about.copied": "已复制 ✓",
+  "about.copy": "复制地址",
+  "about.star": "本插件开源。如果它帮到了你，欢迎去 GitHub 点个 Star ⭐️ —— 这是对作者最大的鼓励。",
+  "about.title": "关于这个插件",
   "bubble.done": "✅ {project} 的差事办完啦～",
   "bubble.mixed": "✋ {project} 在等你批准 · 另有 {rest} 件新动静",
   "bubble.multiDone": "✅ {n} 个差事都办完啦～",

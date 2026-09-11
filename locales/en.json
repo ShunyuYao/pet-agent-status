@@ -1,4 +1,8 @@
 {
+  "about.copied": "Copied ✓",
+  "about.copy": "Copy link",
+  "about.star": "This plugin is open source. If it helps you, please star it on GitHub ⭐️ — it means a lot.",
+  "about.title": "About this plugin",
   "bubble.done": "✅ {project} is all done!",
   "bubble.mixed": "✋ {project} needs your approval · {rest} more update(s)",
   "bubble.multiDone": "✅ {n} tasks all done!",

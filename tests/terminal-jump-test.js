@@ -74,20 +74,20 @@ function chain(appBin, ttyName, basePid) {
 
 // ================= 1. detectTerminal —— 归属判定 =================
 
-// 隔离自证的正确判据是「本轮没有新增/改动真实目录里的文件」，不是「目录不存在」——
-// 插件一旦被真实使用，该目录必然存在（2026-09-10 在用户机器上误报过）。
-// 快照在测试开始前拍，收尾时比对文件名与 mtime。
-function realStateDirSnapshot() {
-  const real = path.join(os.homedir(), '.local', 'state', 'pet-agent-status');
-  if (!fs.existsSync(real)) return { real, exists: false, entries: [] };
-  const entries = fs.readdirSync(real).sort().map((n) => {
-    let mtime = 0;
-    try { mtime = fs.statSync(path.join(real, n)).mtimeMs; } catch (_) { /* 竞态删除 */ }
-    return `${n}@${mtime}`;
-  });
-  return { real, exists: true, entries };
+// 隔离自证：测试**自己的数据**不得出现在真实路径里。
+//
+// ⚠️ 判据不能是「真实目录一个字节都没变」（2026-09-11 实测教训）：维护者自己也在用这个插件，
+// 开发机上真实 agent 会话会持续写状态目录，mtime 快照必然变化 —— 那个守卫在开发机上随机变红，
+// 且红了也说明不了问题。真正要防的是**测试数据泄漏进真实目录**，所以改为按测试专属前缀检查。
+// （其余套件 2026-09-11 已统一到这套判据，本文件当时漏改，现补齐。）
+const TEST_ID_PREFIX = 'pet-as-test-';
+function leakedTestFiles() {
+  const dir = path.join(os.homedir(), '.local', 'state', 'pet-agent-status');
+  if (!fs.existsSync(dir)) return [];
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch (_) { return []; }
+  return names.filter((n) => n.includes(TEST_ID_PREFIX));
 }
-const REAL_STATE_BEFORE = realStateDirSnapshot();
 
 test('iTerm2 会话：沿父链认出 iterm2', () => {
   assert.strictEqual(tj.detectTerminal('/dev/ttys004', chain(ITERM_BIN, 'ttys004')), 'iterm2');
@@ -658,9 +658,8 @@ test('lib/terminal-jump.js 代码里没有中文字面量（中文只许在 loca
   assert.strictEqual(hit, null, `发现中文字面量：${hit && hit[0]}`);
 });
 
-test('测试全程未触碰真实状态目录', () => {
-  const after = realStateDirSnapshot();
-  assert.deepStrictEqual(after.entries, REAL_STATE_BEFORE.entries, '真实状态目录被污染');
+test('测试数据未泄漏进真实状态目录', () => {
+  assert.deepStrictEqual(leakedTestFiles(), [], '测试数据泄漏进了真实状态目录');
 });
 
 // ---- 收尾 ----
