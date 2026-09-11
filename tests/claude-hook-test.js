@@ -290,7 +290,88 @@ test('工具调用/权限等待/批准恢复都不重置 since；新一轮任务
   assert.ok(next.since > first.since, '新起点晚于上一段');
 });
 
-// ---- 6. 隔离自证：全程没碰真实状态目录 ----
+// ---- 6. 真机缺陷回归（2026-09-11，v0.8.2）：闲置提醒被误报成「等待你批准」----
+//
+// 用户实测：compact 结束后会话闲着没动，面板把它标成「等待你批准」。
+// 实录根因（fixtures/waiting-accuracy-facts.md）：`Notification` 是通用通知事件，
+// 至少含 permission_prompt（真在等批准）与 idle_prompt（闲置 60s，等你说话）两类，
+// 旧实现一律映射 waiting。803bf299 实录 `SessionStart:compact` @21:40:47 →
+// `Notification` @21:41:47（整 60s，idle 计时器），全程无任何权限请求。
+//
+// 输入是 Claude Code 真实事件 JSON 经 stdin（不直调 stateForEvent）。
+
+test('闲置提醒 Notification（matcher=idle_prompt）→ 不再是 waiting', () => {
+  const dir = tmp();
+  const base = fixtureOf('session-start.json');
+  const res = runHook(Object.assign({}, base, {
+    hook_event_name: 'Notification',
+    matcher: 'idle_prompt',
+    message: 'Claude is waiting for your input'
+  }), dir);
+  assert.strictEqual(res.status, 0);
+  const rec = readOnly(dir);
+  assert.notStrictEqual(rec.state, 'waiting', '闲置提醒不该显示成「等待你批准」');
+  assert.strictEqual(rec.state, 'running', '会话还活着、只是在等用户说话');
+});
+
+test('闲置提醒：没有 matcher 时靠 message 文本兜底', () => {
+  const dir = tmp();
+  const base = fixtureOf('session-start.json');
+  runHook(Object.assign({}, base, {
+    hook_event_name: 'Notification',
+    message: 'Claude is waiting for your input'
+  }), dir);
+  assert.strictEqual(readOnly(dir).state, 'running');
+});
+
+test('权限请求 Notification 仍然是 waiting（本插件的存在理由，不许误伤）', () => {
+  const dir = tmp();
+  const base = fixtureOf('session-start.json');
+  runHook(Object.assign({}, base, {
+    hook_event_name: 'Notification',
+    matcher: 'permission_prompt',
+    message: 'Claude needs your permission to use Bash'
+  }), dir);
+  assert.strictEqual(readOnly(dir).state, 'waiting');
+});
+
+test('方向性保守：message/matcher 都缺席的 Notification 仍按 waiting', () => {
+  // 宁可多报一次等待，也不能把真在等批准的会话说成在跑——那会让用户错过批准。
+  const dir = tmp();
+  const base = fixtureOf('session-start.json');
+  runHook(Object.assign({}, base, { hook_event_name: 'Notification' }), dir);
+  assert.strictEqual(readOnly(dir).state, 'waiting', '拿不准必须保守报 waiting');
+});
+
+test('陌生措辞的 Notification 也按 waiting（不做反向猜测）', () => {
+  const dir = tmp();
+  const base = fixtureOf('session-start.json');
+  runHook(Object.assign({}, base, {
+    hook_event_name: 'Notification',
+    message: 'Some future notification wording we have never seen'
+  }), dir);
+  assert.strictEqual(readOnly(dir).state, 'waiting');
+});
+
+test('compact 恢复（SessionStart source=compact）把陈旧 waiting 清回 running', () => {
+  // 用户那条路径的完整重放：先真批准（waiting），再 compact 恢复。
+  const dir = tmp();
+  const base = fixtureOf('session-start.json');
+  runHook(Object.assign({}, base, {
+    hook_event_name: 'Notification',
+    matcher: 'permission_prompt',
+    message: 'Claude needs your permission to use Bash'
+  }), dir);
+  assert.strictEqual(readOnly(dir).state, 'waiting', '前置条件：先处于真实等待批准');
+
+  const res = runFixture('session-start-compact.json', dir);
+  assert.strictEqual(res.status, 0);
+  const rec = readOnly(dir);
+  assert.strictEqual(rec.state, 'running', 'compact 恢复后不该还挂着「等待你批准」');
+  assert.strictEqual(rec.lastEvent, 'SessionStart');
+});
+
+// ---- 7. 隔离自证：全程没碰真实状态目录 ----
 test('测试期间未写入真实 ~/.local/state/pet-agent-status', () => {
   assert.deepStrictEqual(leakedTestFiles(), [], '测试数据泄漏进了真实状态目录');
 });
