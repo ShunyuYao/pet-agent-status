@@ -77,15 +77,14 @@ function chain(appBin, ttyName, basePid) {
 // 隔离自证的正确判据是「本轮没有新增/改动真实目录里的文件」，不是「目录不存在」——
 // 插件一旦被真实使用，该目录必然存在（2026-09-10 在用户机器上误报过）。
 // 快照在测试开始前拍，收尾时比对文件名与 mtime。
+// 只快照文件名集合，刻意不含 mtime：这台机器上装着本插件的 hooks，测试运行期间
+// **活着的 agent 会话本来就在往真实目录刷自己的心跳**（2026-09-11 实测：两个并行
+// Claude 会话让 mtime 版守卫必红）。测试泄漏的真实形态是「多出/删掉文件」——
+// 测试用的都是自造 sessionId，绝不会恰好命中真实会话的 UUID 去改既有文件。
 function realStateDirSnapshot() {
   const real = path.join(os.homedir(), '.local', 'state', 'pet-agent-status');
   if (!fs.existsSync(real)) return { real, exists: false, entries: [] };
-  const entries = fs.readdirSync(real).sort().map((n) => {
-    let mtime = 0;
-    try { mtime = fs.statSync(path.join(real, n)).mtimeMs; } catch (_) { /* 竞态删除 */ }
-    return `${n}@${mtime}`;
-  });
-  return { real, exists: true, entries };
+  return { real, exists: true, entries: fs.readdirSync(real).sort() };
 }
 const REAL_STATE_BEFORE = realStateDirSnapshot();
 
