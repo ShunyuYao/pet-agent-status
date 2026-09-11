@@ -295,7 +295,24 @@ test('summary 计数与行一致', () => {
     rec({ sessionId: 'w1', state: 'waiting', lastEvent: 'Notification', ts: T0 })
   ]);
   const { summary } = run(snap);
-  assert.deepStrictEqual(summary, { running: 2, waiting: 1, total: 3, unknown: 0, focus: { sessionId: 'w1', state: 'waiting', project: 'demo' } });
+  assert.deepStrictEqual(summary, { running: 2, waiting: 1, done: 0, total: 3, unknown: 0, focus: { sessionId: 'w1', state: 'waiting', project: 'demo' } });
+});
+
+// 2026-09-11：summary 增加 done 计数（胶囊/徽标要显示「刚办完几件」，原来 done 不进汇总）。
+// done 是**展示态**：绿驻留窗（DONE_SHOW_MS=5min）内计入，过窗转 idle 后不再计。
+test('summary.done 只计绿驻留窗内的完成行', () => {
+  const dir = tmp();
+  const snap = seed(dir, [
+    rec({ sessionId: 'd-fresh', state: 'done', lastEvent: 'Stop', ts: T0 - 60 * 1000 }),
+    rec({ sessionId: 'd-fresh2', state: 'ended', lastEvent: 'SessionEnd', ts: T0 - 2 * 60 * 1000 }),
+    rec({ sessionId: 'd-old', state: 'done', lastEvent: 'Stop', ts: T0 - 6 * 60 * 1000 }),
+    rec({ sessionId: 'r1', state: 'running', ts: T0 })
+  ]);
+  const { rows, summary } = run(snap);
+  assert.strictEqual(summary.done, 2, '5 分钟驻留窗内的 done/ended 都算');
+  assert.strictEqual(summary.running, 1);
+  // 过窗那条已转 idle，行还在（未到 DROP_IDLE_MS）但不进 done 计数
+  assert.strictEqual(rows.find((x) => x.sessionId === 'd-old').state, 'idle');
 });
 
 test('空目录 → 空行与零计数（面板据此进空态）', () => {

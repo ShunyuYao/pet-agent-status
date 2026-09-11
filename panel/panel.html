@@ -47,13 +47,18 @@ body{
 .topbar{display:flex;align-items:center;gap:8px;margin-bottom:12px;-webkit-app-region:drag}
 .title{font-size:16px;font-weight:600;color:#fff}
 .summary{
-  display:inline-flex;align-items:center;gap:5px;
+  display:inline-flex;align-items:center;gap:8px;
   padding:3px 9px;border-radius:999px;
-  background:rgba(61,126,255,.18);
-  color:var(--primary);font-size:11px;font-family:"Inter",system-ui,sans-serif;
+  background:rgba(255,255,255,.08);
+  font-size:11px;font-family:"Inter",system-ui,sans-serif;
 }
 .summary[hidden]{display:none}
-.summary-dot{width:6px;height:6px;border-radius:50%;background:var(--primary)}
+/* 每个状态段自带圆点，颜色跟随状态（dot 用 currentColor 与文字同色） */
+.summary-part{display:inline-flex;align-items:center;gap:5px}
+.summary-part.is-waiting{color:var(--warning)}
+.summary-part.is-running{color:var(--primary)}
+.summary-part.is-done{color:var(--success)}
+.summary-dot{width:6px;height:6px;border-radius:50%;background:currentColor}
 .close{-webkit-app-region:no-drag;
   margin-left:auto;background:none;border:0;cursor:pointer;
   color:var(--gray);font-size:16px;line-height:1;padding:2px 4px;
@@ -181,7 +186,7 @@ body{
 <body>
   <div class="topbar">
     <span class="title" id="title"></span>
-    <span class="summary" id="summary" hidden><span class="summary-dot"></span><span id="summary-text"></span></span>
+    <span class="summary" id="summary" hidden></span>
     <button class="gear" id="gear" type="button">⚙</button>
     <button class="close" id="close" type="button">✕</button>
   </div>
@@ -267,6 +272,8 @@ body{
     'zh-CN': {
       'panel.title': 'Agent 会话',
       'panel.summary.running': '{n} 运行中',
+      'panel.summary.waiting': '{n} 等待批准',
+      'panel.summary.done': '{n} 已完成',
       'panel.footer.hint': '点击会话跳回终端 · 完成时宠物会提醒你',
       'empty.title': '还没有正在进行的会话',
       'empty.desc1': '接入 Claude Code 钩子后，会话状态会自动出现在这里。',
@@ -296,6 +303,8 @@ body{
     en: {
       'panel.title': 'Agent Sessions',
       'panel.summary.running': '{n} running',
+      'panel.summary.waiting': '{n} waiting',
+      'panel.summary.done': '{n} done',
       'panel.footer.hint': "Click a session to jump back · your pet pings you when it's done",
       'empty.title': 'No sessions yet',
       'empty.desc1': 'Install the Claude Code hooks and sessions will show up here.',
@@ -349,7 +358,6 @@ body{
   // 比闪一下引导更糟（用户以为面板坏了）。
   var ready = !(window.pet && window.pet.events && typeof window.pet.events.on === 'function');
   var elSummary = $('summary');
-  var elSummaryText = $('summary-text');
   var elInstall = $('install-claude');
   var elInstalled = $('installed');
   var elUninstall = $('uninstall-claude');
@@ -572,9 +580,27 @@ body{
       }
     }
 
-    var running = Number(summary.running) || 0;
-    elSummary.hidden = running === 0;
-    elSummaryText.textContent = t('panel.summary.running', { n: running });
+    // 汇总胶囊：最多同屏两个状态段，优先级 waiting > running > done ——
+    // 与徽标（lib/badge.js#segmentsFor）同一条取舍规则，两处显示的内容一致。
+    // ⚠️ 2026-09-11 真机缺陷：原来只显示 running，「2 运行中 + 2 已完成」时已完成不见踪影。
+    var summaryParts = [
+      ['waiting', Number(summary.waiting) || 0],
+      ['running', Number(summary.running) || 0],
+      ['done', Number(summary.done) || 0]
+    ].filter(function (p) { return p[1] > 0; }).slice(0, 2);
+    elSummary.hidden = summaryParts.length === 0;
+    elSummary.textContent = '';
+    for (var p = 0; p < summaryParts.length; p++) {
+      var part = document.createElement('span');
+      part.className = 'summary-part is-' + summaryParts[p][0];
+      var dot = document.createElement('span');
+      dot.className = 'summary-dot';
+      var txt = document.createElement('span');
+      txt.textContent = t('panel.summary.' + summaryParts[p][0], { n: summaryParts[p][1] });
+      part.appendChild(dot);
+      part.appendChild(txt);
+      elSummary.appendChild(part);
+    }
 
     // 三态而非两态：「还没收到首帧快照」既不是有会话、也不是没接入。
     // ⚠️ 2026-09-11 真机缺陷：面板打开到首个 tick（最长 2s）之间 rows 恒为空，

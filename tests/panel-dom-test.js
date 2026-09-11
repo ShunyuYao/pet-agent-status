@@ -278,8 +278,50 @@ test('5 行快照：行数 / waiting 置顶且带描边 class / 各行状态 cla
   assert.strictEqual(p.$$('.row.is-waiting').length, 1);
 
   assert.strictEqual(p.$('#summary').hidden, false, '有运行中会话时汇总胶囊应显示');
-  assert.strictEqual(p.$('#summary-text').textContent, '2 运行中');
+  // 胶囊最多两段，waiting > running > done：本快照 1 waiting + 2 running + 1 done，
+  // done 让位（与徽标两段上限同一条取舍规则）
+  const parts = p.$$('#summary .summary-part');
+  assert.strictEqual(parts.length, 2, '胶囊应显示两个状态段');
+  assert.ok(parts[0].classList.contains('is-waiting'), '第一段应是 waiting');
+  assert.strictEqual(parts[0].textContent, '1 等待批准');
+  assert.ok(parts[1].classList.contains('is-running'), '第二段应是 running');
+  assert.strictEqual(parts[1].textContent, '2 运行中');
   assert.strictEqual(p.$('#empty').hidden, true, '有会话时不应显示空态');
+  p.close();
+});
+
+// 2026-09-11 真机缺陷（用户截图）：2 运行中 + 2 已完成时，胶囊只显示「2 运行中」，
+// 已完成不见踪影。修复后第二个名额给 done。
+test('汇总胶囊：运行中 + 已完成同屏显示（done 占第二段）', () => {
+  const snap = snapshotOf([
+    rec({ sessionId: 'r1', state: 'running', ts: T0 - 30 * 1000 }),
+    rec({ sessionId: 'r2', state: 'running', ts: T0 - 60 * 1000 }),
+    rec({ sessionId: 'd1', state: 'done', ts: T0 - 60 * 1000 }),
+    rec({ sessionId: 'd2', state: 'done', ts: T0 - 2 * 60 * 1000 })
+  ]);
+  assert.strictEqual(snap.summary.running, 2);
+  assert.strictEqual(snap.summary.done, 2, '前置：summary 必须带 done 计数');
+
+  const p = mountPanel();
+  p.push('agent-status:snapshot', snap);
+  const parts = p.$$('#summary .summary-part');
+  assert.strictEqual(parts.length, 2);
+  assert.ok(parts[0].classList.contains('is-running'));
+  assert.strictEqual(parts[0].textContent, '2 运行中');
+  assert.ok(parts[1].classList.contains('is-done'), '已完成必须占据第二段');
+  assert.strictEqual(parts[1].textContent, '2 已完成');
+  p.close();
+});
+
+test('汇总胶囊：只有已完成时单独显示绿段', () => {
+  const snap = snapshotOf([rec({ sessionId: 'd1', state: 'done', ts: T0 - 60 * 1000 })]);
+  const p = mountPanel();
+  p.push('agent-status:snapshot', snap);
+  assert.strictEqual(p.$('#summary').hidden, false, '有已完成会话时胶囊应显示');
+  const parts = p.$$('#summary .summary-part');
+  assert.strictEqual(parts.length, 1);
+  assert.ok(parts[0].classList.contains('is-done'));
+  assert.strictEqual(parts[0].textContent, '1 已完成');
   p.close();
 });
 

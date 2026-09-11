@@ -51,8 +51,26 @@ function makePet() {
     assert.deepStrictEqual(segmentsFor({ waiting: 2, running: 0 }), [{ tone: 'warning', text: '2' }]);
   });
 
+  // 2026-09-11 真机缺陷（用户截图）：done 原来根本不在映射表里，「2 运行中 + 2 已完成」时
+  // 徽标只有一段——第二个名额空着，已完成却永远没资格显示。修复后按
+  // waiting > running > done 优先级取前两个非零状态填满两段（宿主上限 BADGE_MAX_SEGMENTS=2）。
+  await test('done → success 段：有空位时上榜', () => {
+    assert.deepStrictEqual(segmentsFor({ waiting: 0, running: 2, done: 2 }),
+      [{ tone: 'primary', text: '2' }, { tone: 'success', text: '2' }]);
+    assert.deepStrictEqual(segmentsFor({ waiting: 1, running: 0, done: 3 }),
+      [{ tone: 'warning', text: '1' }, { tone: 'success', text: '3' }]);
+    assert.deepStrictEqual(segmentsFor({ waiting: 0, running: 0, done: 1 }),
+      [{ tone: 'success', text: '1' }]);
+  });
+
+  await test('三态并存：宿主限死 2 段，done 让位（waiting > running > done）', () => {
+    assert.deepStrictEqual(segmentsFor({ waiting: 1, running: 3, done: 1 }),
+      [{ tone: 'warning', text: '1' }, { tone: 'primary', text: '3' }]);
+  });
+
   await test('无会话 → null（上层据此 clear）', () => {
     assert.strictEqual(segmentsFor({ waiting: 0, running: 0 }), null);
+    assert.strictEqual(segmentsFor({ waiting: 0, running: 0, done: 0 }), null);
     assert.strictEqual(segmentsFor(null), null);
   });
 
