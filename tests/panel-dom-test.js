@@ -69,6 +69,11 @@ function mountPanel(opts) {
       ? { closePanel() { closed.push(true); } }
       : { closePanel() { closed.push(true); }, copyText(s) { copied.push(s); } }
   };
+  // setPanelPinned：面板声明「非常驻」→ 宿主 blur 即关（失焦自动关闭）。
+  // noSetPanelPinned 模拟没有这个 SDK 面的旧宿主，验面板不炸。
+  if (!o.noSetPanelPinned) {
+    petMock.ui.setPanelPinned = (v) => { if (o.onSetPanelPinned) o.onSetPanelPinned(v); };
+  }
   const dom = new JSDOM(html, {
     runScripts: 'dangerously',
     url: 'file://' + PANEL_HTML,
@@ -203,6 +208,90 @@ test('DESIGN.md 尺寸：徽标 26 圆角 8 / 角标 13 / 项目名 13 / 副行 
   assert.ok(/font-size:10\.5px/.test(ruleOf('.footer')), '底部提示字号不是 10.5');
   assert.ok(/font-size:12\.5px/.test(ruleOf('.install-btn')), '主按钮字号不是 12.5');
   assert.ok(/border-radius:10px/.test(ruleOf('.install-btn')), '主按钮圆角不是 10');
+});
+
+// ---- 2026-09-12 用户对照 Figma 提出的三处不一致 ----
+
+test('头部 ⚙ 与 ✕ 同尺寸同样式（设计稿无 ⚙，补入时不得比 ✕ 大一圈）', () => {
+  const css = html.match(/<style>([\s\S]*?)<\/style>/)[1];
+  const ruleOf = (sel) => {
+    const m = css.match(new RegExp('^' + sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*\\{([^}]*)\\}', 'm'));
+    assert.ok(m, `找不到 CSS 规则 ${sel}`);
+    return m[1];
+  };
+  // 两个钮共用一条规则（.icon-btn）才不会再漂：分开写两份迟早又各调各的
+  const btn = ruleOf('.icon-btn');
+  assert.ok(/width:22px/.test(btn) && /height:22px/.test(btn), '两个头部钮的命中区必须同为 22×22');
+  assert.ok(/color:var\(--gray\)/.test(btn), '图标色应为设计稿的 #9AA0AC（--gray）');
+  // 图标用 SVG 而不是字符：⚙(U+2699) 与 ✕(U+2715) 的字形度量差一大截，
+  // 同样 font-size 下看起来仍然一大一小——这正是用户看到的现象。
+  const svgRule = ruleOf('.icon-btn svg');
+  assert.ok(/width:13px/.test(svgRule) && /height:13px/.test(svgRule), '两个图标必须同为 13×13（设计稿 ✕ 13px）');
+  const p = mountPanel();
+  const gear = p.$('#gear'); const close = p.$('#close');
+  assert.ok(gear.classList.contains('icon-btn') && close.classList.contains('icon-btn'),
+    '⚙ 与 ✕ 必须走同一条 .icon-btn 规则');
+  assert.ok(gear.querySelector('svg') && close.querySelector('svg'), '两个钮都必须是 SVG 图标，不是字符');
+  assert.ok(gear.getAttribute('title') && gear.getAttribute('aria-label'),
+    '⚙ 是本插件设置的唯一入口，必须有 title/aria-label');
+  assert.ok(close.getAttribute('title') && close.getAttribute('aria-label'));
+  p.close();
+});
+
+test('App 形态角标是设计稿的窗口图形，不是字符占位（Figma 7:25）', () => {
+  const p = mountPanel();
+  p.push('agent-status:snapshot', snapshotOf([
+    rec({ sessionId: 'cli1', tty: '/dev/ttys001' }),
+    rec({ sessionId: 'app1', agent: 'codex', threadId: '01a08a1d-4f63-7e30-af03-48ae77b414b5', form: 'app', tty: null })
+  ]));
+  const formOf = (id) => p.$(`.row[data-session-id="${id}"] .form-badge`);
+  // CLI 档保持设计稿的 `>_` 文本
+  assert.strictEqual(formOf('cli1').dataset.form, 'cli');
+  assert.strictEqual(formOf('cli1').textContent, '>_');
+  // App 档：窗口图形由两个子元素画出（外框 + 顶部标题栏），且不含任何文字
+  const app = formOf('app1');
+  assert.strictEqual(app.dataset.form, 'app');
+  assert.strictEqual(app.textContent, '', 'App 角标不得再用 ▭ 之类的字符占位');
+  assert.ok(app.querySelector('.win-frame'), '缺少窗口外框');
+  assert.ok(app.querySelector('.win-bar'), '缺少窗口标题栏横条');
+  p.close();
+});
+
+test('角标底色/描边对齐设计稿（#2A2E39 底 + #3A3F4C 描边、圆角 4.5、图标白色）', () => {
+  const css = html.match(/<style>([\s\S]*?)<\/style>/)[1];
+  const m = css.match(/^\.form-badge\s*\{([\s\S]*?)\}/m);
+  assert.ok(m, '找不到 .form-badge 规则');
+  const form = m[1];
+  assert.ok(/border-radius:4\.5px/.test(form), '角标圆角应为 4.5');
+  assert.ok(/#3A3F4C|#3a3f4c/.test(form), '角标缺少设计稿的 #3A3F4C 描边');
+  assert.ok(/color:#fff|color:#FFF/.test(form), '角标文字/图形应为白色（旧实现是灰色）');
+});
+
+test('头部恒单行：标题与汇总胶囊都不换行（两段汇总时也不许挤成两行）', () => {
+  const css = html.match(/<style>([\s\S]*?)<\/style>/)[1];
+  // 设计稿头部是一行（Figma 2:3 高 19）。汇总胶囊显两段时（waiting+running）内容变宽，
+  // 没有 nowrap 就会把「Agent 会话」和胶囊里的字一起折断——真宿主截图实拍到过。
+  assert.ok(/^\.title\{[^}]*white-space:nowrap/m.test(css), '标题必须 nowrap');
+  assert.ok(/^\.summary\{[^}]*white-space:nowrap/m.test(css), '汇总胶囊必须 nowrap');
+  assert.ok(/^\.topbar\{[^}]*flex-wrap:nowrap/m.test(css), '头部不许换行');
+  // 宽度不够时该让胶囊自己收（省略号），而不是把标题或按钮挤走
+  assert.ok(/^\.summary\{[^}]*min-width:0/m.test(css) && /^\.summary\{[^}]*overflow:hidden/m.test(css),
+    '胶囊要能收缩并裁剪，避免撑爆头部');
+});
+
+test('失焦即关：面板一挂载就向宿主声明非常驻（点空白处自动关闭）', () => {
+  const pinCalls = [];
+  const p = mountPanel({ onSetPanelPinned: (v) => pinCalls.push(v) });
+  assert.deepStrictEqual(pinCalls, [false],
+    '必须且只需声明一次 setPanelPinned(false)——宿主据此在 blur 时关掉面板');
+  p.close();
+});
+
+test('旧宿主没有 setPanelPinned 时面板照常工作（能力缺失不炸）', () => {
+  const p = mountPanel({ noSetPanelPinned: true });
+  p.push('agent-status:snapshot', snapshotOf([rec({ sessionId: 'a' })]));
+  assert.strictEqual(p.$$('.row').length, 1, '缺这个 SDK 面时面板仍要正常渲染');
+  p.close();
 });
 
 // ---- 内联副本 vs 仓内资源：漂移即红 ----
