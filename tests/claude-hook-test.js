@@ -126,9 +126,13 @@ test('pid 写的是 Claude Code 进程（父进程），不是 hook 自己', () 
   const dir = tmp();
   const res = runFixture('stop.json', dir);
   const rec = readOnly(dir);
-  // hook 自己的 pid 退出后就没了，拿来做存活探测毫无意义；父进程才是被观测对象。
+  // hook 自己的 pid 退出后就没了，拿来做存活探测毫无意义；被观测对象是 agent 进程。
+  // 2026-09-11 起不再恒等于直接父进程：hook 的父常是 agent 起的中间 shell（写完即退，
+  // 拿它做存活探测会把活着的会话误判成 error），故取父链上第一个有 tty 的祖先＝agent 本体；
+  // 测试环境里本进程没有控制终端（`ps` 返回 `??`），上溯找不到就回落父进程 —— 两者皆可，
+  // 唯独不能是 hook 自己。
   assert.notStrictEqual(rec.pid, res.pid, 'pid 不该是 hook 自身的 pid');
-  assert.strictEqual(rec.pid, process.pid, '父进程即本测试进程');
+  assert.ok(Number.isFinite(rec.pid) && rec.pid > 0, 'pid 应是个真实进程号');
 });
 
 // ---- 3. 同会话多事件覆盖写同一个文件 ----

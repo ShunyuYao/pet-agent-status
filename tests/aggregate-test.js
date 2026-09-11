@@ -192,10 +192,12 @@ test('schema 高于当前版本归 unknown（不当 done）', () => {
 test('waiting 全部置顶，组内 ts 降序；其余 ts 降序（乱序输入）', () => {
   const dir = tmp();
   const snap = seed(dir, [
-    rec({ sessionId: 'run-old', state: 'running', ts: T0 - 10 * MIN }),
-    rec({ sessionId: 'wait-old', state: 'waiting', lastEvent: 'Notification', ts: T0 - 8 * MIN }),
-    rec({ sessionId: 'run-new', state: 'running', ts: T0 - 1 * MIN }),
-    rec({ sessionId: 'wait-new', state: 'waiting', lastEvent: 'Notification', ts: T0 - 2 * MIN })
+    // 全部压在 STALE_UNKNOWN_MS（3min）内：本用例测的是**排序**，不是 stale 推导。
+    // 超窗的 running/waiting 会被判 unknown（2026-09-11 真机修复），那会让排序断言测错东西。
+    rec({ sessionId: 'run-old', state: 'running', ts: T0 - 150 * 1000 }),
+    rec({ sessionId: 'wait-old', state: 'waiting', lastEvent: 'Notification', ts: T0 - 120 * 1000 }),
+    rec({ sessionId: 'run-new', state: 'running', ts: T0 - 20 * 1000 }),
+    rec({ sessionId: 'wait-new', state: 'waiting', lastEvent: 'Notification', ts: T0 - 40 * 1000 })
   ]);
   assert.deepStrictEqual(byId(run(snap).rows), ['wait-new', 'wait-old', 'run-new', 'run-old']);
 });
@@ -204,7 +206,7 @@ test('criteria §3 场景：[waiting 置顶, running, done(idle), error]', () =>
   const dir = tmp();
   const snap = seed(dir, [
     rec({ sessionId: 'r-new', state: 'running', ts: T0 - 5 * 1000 }),
-    rec({ sessionId: 'w-old', state: 'waiting', lastEvent: 'Notification', ts: T0 - 10 * MIN }),
+    rec({ sessionId: 'w-old', state: 'waiting', lastEvent: 'Notification', ts: T0 - 150 * 1000 }),
     rec({ sessionId: 'e', state: 'running', pid: 999999, ts: T0 - 2 * MIN }),
     rec({ sessionId: 'd', state: 'done', lastEvent: 'Stop', ts: T0 - 3 * MIN })
   ]);
@@ -250,13 +252,14 @@ test('行结构含 panel 渲染所需全部字段', () => {
 test('running 行时间显 mm:ss，完成行显相对时间', () => {
   const dir = tmp();
   const snap = seed(dir, [
-    rec({ sessionId: 'r', state: 'running', ts: T0 - (3 * 60 + 7) * 1000 }),
+    // 2 分 07 秒：压在 STALE_UNKNOWN_MS（3min）内。本用例测时间格式，超窗会变 unknown（走相对时间）。
+    rec({ sessionId: 'r', state: 'running', ts: T0 - (2 * 60 + 7) * 1000 }),
     rec({ sessionId: 'd', state: 'done', lastEvent: 'Stop', ts: T0 - 4 * MIN })
   ]);
   const rows = run(snap).rows;
   const r = rows.find((x) => x.sessionId === 'r');
   const d = rows.find((x) => x.sessionId === 'd');
-  assert.strictEqual(r.timeText, '03:07');
+  assert.strictEqual(r.timeText, '02:07');
   assert.strictEqual(d.timeText, t('time.minutesAgo', { n: 4 }));
 });
 
@@ -524,8 +527,8 @@ test('focus 选择：waiting > running > error > done，同级取最新；每行
   const dir = tmp();
   const snap = seed(dir, [
     rec({ sessionId: 'r-new', state: 'running', ts: T0 - 1000 }),
-    rec({ sessionId: 'w-old', state: 'waiting', lastEvent: 'Notification', ts: T0 - 10 * MIN }),
-    rec({ sessionId: 'w-new', state: 'waiting', lastEvent: 'Notification', ts: T0 - 9 * MIN }),
+    rec({ sessionId: 'w-old', state: 'waiting', lastEvent: 'Notification', ts: T0 - 150 * 1000 }),
+    rec({ sessionId: 'w-new', state: 'waiting', lastEvent: 'Notification', ts: T0 - 60 * 1000 }),
     rec({ sessionId: 'd', state: 'done', lastEvent: 'Stop', ts: T0 - 1000 })
   ]);
   const { rows, summary } = run(snap);

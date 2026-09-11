@@ -244,6 +244,10 @@ body{
   var $ = function (id) { return document.getElementById(id); };
   var elList = $('list');
   var elEmpty = $('empty');
+  // 是否已收到首帧真实快照（决定空态该不该画接入引导）。
+  // 宿主没注入 window.pet 时永远等不到快照，那时直接置 true —— 否则面板会空着不动，
+  // 比闪一下引导更糟（用户以为面板坏了）。
+  var ready = !(window.pet && window.pet.events && typeof window.pet.events.on === 'function');
   var elSummary = $('summary');
   var elSummaryText = $('summary-text');
   var elInstall = $('install-claude');
@@ -367,10 +371,12 @@ body{
     var rows = (snapshot && Array.isArray(snapshot.rows)) ? snapshot.rows : [];
     var summary = (snapshot && snapshot.summary) || {};
 
-    // tool 说了算：语言一变就把静态文案重刷一遍，别和行内文案打架
-    if (snapshot && CATALOGS[snapshot.locale] && snapshot.locale !== locale) {
-      locale = snapshot.locale;
-      paintStatic();
+    // ⚠️ 2026-09-11 真机缺陷：原来这里是「tool 说了算」，但 tool 跑在宿主 fork 的
+    // utilityProcess 里，那个环境的 LANG 不代表用户的界面语言（实测中文用户被判成 en，
+    // 整个面板显示英文）。**renderer 的 navigator.language 才是权威**——它就是宿主窗口的语言。
+    // 所以这里不再被 tool 覆盖，反过来把真实语言告诉 tool，让行内文案（副行/相对时间）跟上。
+    if (snapshot && snapshot.locale && snapshot.locale !== locale) {
+      emit('agent-status:locale', { locale: locale });
     }
 
     elList.textContent = '';
@@ -391,10 +397,14 @@ body{
     elSummary.hidden = running === 0;
     elSummaryText.textContent = t('panel.summary.running', { n: running });
 
+    // 三态而非两态：「还没收到首帧快照」既不是有会话、也不是没接入。
+    // ⚠️ 2026-09-11 真机缺陷：面板打开到首个 tick（最长 2s）之间 rows 恒为空，
+    // 旧实现当场画出「一键接入钩子」引导——用户明明早就接入了，每次开窗都闪一下那张卡。
+    // 未就绪时两块都不显示（面板空着 < 1 帧），首帧一到再按真实内容渲染。
     var isEmpty = rows.length === 0;
-    elEmpty.hidden = !isEmpty;
+    elEmpty.hidden = !(isEmpty && ready);
     elList.hidden = isEmpty;
-    if (isEmpty) renderInstallState();
+    if (isEmpty && ready) renderInstallState();
   }
 
   // 空态的接入按钮态机：未接入 → 蓝主按钮；已接入 → 「已接入 ✓」+ 移除钩子。
@@ -412,7 +422,7 @@ body{
     elCodexTrust.hidden = !codexInstalled;
   }
 
-  on(EV_SNAPSHOT, function (snapshot) { render(snapshot); });
+  on(EV_SNAPSHOT, function (snapshot) { ready = true; render(snapshot); });
   on(EV_INSTALL_STATE, function (data) {
     installed = !!(data && data.claude);
     codexInstalled = !!(data && data.codex);
@@ -420,6 +430,7 @@ body{
   });
 
   // 首帧：先按空态渲染，等 tool 的第一份快照（tool 侧 start() 会立刻推一轮）
+  // 首帧占位：ready 仍为 false，因此不画接入引导（见 render 里的三态说明）
   render({ rows: [], summary: { running: 0 } });
 })();
 </script>

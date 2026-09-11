@@ -24,6 +24,7 @@ const TICK_MS = 2000;                            // 宿主把最小间隔钳到 
 // 改一处必须改两处；tests/panel-dom-test.js 与 tool-lifecycle-test.js 各自断言了名字，
 // 漂移会在门禁里红。
 const SNAPSHOT_EVENT = 'agent-status:snapshot';
+const LOCALE_EVENT = 'agent-status:locale';
 const INSTALL_STATE_EVENT = 'agent-status:install-state';   // tool → panel：接入与否
 const INSTALL_CLAUDE_EVENT = 'agent-status:install-claude';   // panel → tool：接入意图
 const UNINSTALL_CLAUDE_EVENT = 'agent-status:uninstall-claude'; // panel → tool：移除意图
@@ -62,9 +63,15 @@ function createCollector(deps) {
   // 语言只认这一处。副行/时间文案由 tool 取词后随行下发，panel 的静态文案则按
   // 快照里带的 locale 取 —— 两边各猜各的会当场撞车：tool 看 LANG、panel 看
   // navigator.language，两者不一致时同一块面板上半截中文下半截英文。
-  const i18n = createNodeI18n(d.locale);
-  const t = typeof d.t === 'function' ? d.t : i18n.t;
-  const locale = d.locale || i18n.locale;
+  let i18n = createNodeI18n(d.locale);
+  let t = typeof d.t === 'function' ? d.t : i18n.t;
+  let locale = d.locale || i18n.locale;
+  // 换语言：重建词表与取词函数（注入了 d.t 的测试不受影响，仍用注入的那个）
+  function applyLocale(next) {
+    i18n = createNodeI18n(next);
+    if (typeof d.t !== 'function') t = i18n.t;
+    locale = i18n.locale;
+  }
   const link = createPetLink({ playAnimGuard: d.playAnimGuard });
   const badgeLink = createBadgeLink();
   // Codex App 实时增强（默认关，manifest 设置项 codexIpcEnabled）。
@@ -245,6 +252,14 @@ function createCollector(deps) {
     subscribe(pet, INSTALL_CODEX_EVENT, () => handleInstallCodex(pet));
     subscribe(pet, UNINSTALL_CODEX_EVENT, () => handleUninstallCodex(pet));
     subscribe(pet, JUMP_EVENT, (data) => handleJump(pet, data));
+    // 语言以 renderer 的 navigator.language 为准（tool 进程的 LANG 不代表界面语言，
+    // 实测会把中文用户判成 en）。panel 首次发现分歧时报上来，这里换表并立即重推一轮。
+    subscribe(pet, LOCALE_EVENT, (data) => {
+      const next = data && data.locale;
+      if (!next || next === locale) return;
+      applyLocale(next);
+      tick(pet);
+    });
     // 必须 await：pet.scheduler.every 返回的是 Promise<taskId>，
     // 直接存 Promise 会让 cancel 拿到个对象、恒 miss，旧定时器永不回收（宿主已知坑）。
     await syncCodexIpc(pet);
@@ -310,7 +325,7 @@ async function deactivate(pet) {
 module.exports = {
   activate, deactivate, createCollector,
   isPidAlive, TICK_MS,
-  SNAPSHOT_EVENT, INSTALL_STATE_EVENT, INSTALL_CLAUDE_EVENT, UNINSTALL_CLAUDE_EVENT,
+  SNAPSHOT_EVENT, LOCALE_EVENT, INSTALL_STATE_EVENT, INSTALL_CLAUDE_EVENT, UNINSTALL_CLAUDE_EVENT,
   INSTALL_CODEX_EVENT, UNINSTALL_CODEX_EVENT,
   JUMP_EVENT, JUMP_ERROR_TTL_MS
 };

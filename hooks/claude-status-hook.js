@@ -19,7 +19,7 @@ function quit() {
 function handle(raw) {
   const { stateForEvent } = require(path.join(LIB, 'claude-events.js'));
   const { writeStatus } = require(path.join(LIB, 'state-files.js'));
-  const { resolveTty } = require(path.join(LIB, 'tty-detect.js'));
+  const { resolveTty, resolveAgentPid } = require(path.join(LIB, 'tty-detect.js'));
 
   const event = JSON.parse(raw);
   const state = stateForEvent(event.hook_event_name);
@@ -33,8 +33,10 @@ function handle(raw) {
     sessionId: event.session_id,
     cwd: event.cwd,
     tty: resolveTty(process.ppid),
-    // 挂钩的是 Claude Code 进程，本脚本自己的 pid 一写完就没了，做存活探测无意义
-    pid: process.ppid,
+    // 挂钩的是 agent 进程，本脚本自己的 pid 一写完就没了，做存活探测无意义。
+    // ⚠️ 不能直接用 ppid：hook 的直接父进程常是 agent 起的**中间 shell**，它写完就退，
+    // 拿它做存活探测会把活得好好的会话误判成 error。取「父链上第一个有 tty 的祖先」＝ agent 本体。
+    pid: resolveAgentPid(process.ppid) || process.ppid,
     state,
     lastEvent: event.hook_event_name,
     source: 'hook'

@@ -21,7 +21,7 @@ function quit() {
 function handle(raw) {
   const { stateForEvent, threadIdOf } = require(path.join(LIB, 'codex-events.js'));
   const { writeStatus } = require(path.join(LIB, 'state-files.js'));
-  const { resolveTty } = require(path.join(LIB, 'tty-detect.js'));
+  const { resolveTty, resolveAgentPid } = require(path.join(LIB, 'tty-detect.js'));
 
   const event = JSON.parse(raw);
   const state = stateForEvent(event.hook_event_name);
@@ -35,8 +35,9 @@ function handle(raw) {
     sessionId: event.session_id,
     cwd: event.cwd,
     tty: resolveTty(process.ppid),
-    // 挂钩的是 Codex CLI 进程，本脚本自己的 pid 一写完就没了，做存活探测无意义
-    pid: process.ppid,
+    // 挂钩的是 Codex CLI 进程；不能用 ppid（hook 的直接父常是中间 shell，写完即退，
+    // 拿它做存活探测会把活着的会话误判成 error）。取父链上第一个有 tty 的祖先＝agent 本体。
+    pid: resolveAgentPid(process.ppid) || process.ppid,
     state,
     lastEvent: event.hook_event_name,
     source: 'hook'

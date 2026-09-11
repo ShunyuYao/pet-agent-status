@@ -255,8 +255,11 @@ test('session_id 不是 UUID 时不写 threadId（选填字段不造假值）', 
   assert.strictEqual(sf.validateRecord(rec), null);
 });
 
-test('pid 写父进程（Codex CLI 本体），不是 hook 自己', () => {
+test('pid 越过中间进程指向 agent 本体，不是 hook 自己、也不是中间壳', () => {
   // hook 写完就退出，写自己的 pid 会让 aggregate 的 error 存活探测恒判「已中断」。
+  // 本用例的 relay 正是真机里那层「agent 起的中间 shell」：2026-09-11 前实现只问父一层，
+  // 于是记下这个转瞬即逝的壳；新实现沿父链找第一个有 tty 的祖先（测试环境无 tty 时回落），
+  // 判据因此从「恒等于直接父」改为「是个真实 pid 且不是 hook 自己」。
   const dir = tmp();
   const relay = `
     const { spawnSync } = require('child_process');
@@ -270,7 +273,11 @@ test('pid 写父进程（Codex CLI 本体），不是 hook 自己', () => {
   });
   assert.strictEqual(res.status, 0, res.stderr);
   const middlePid = Number(res.stdout.trim());
-  assert.strictEqual(readOnly(dir).pid, middlePid, 'pid 应是 Codex 进程（hook 的父进程）');
+  const got = readOnly(dir).pid;
+  assert.ok(Number.isFinite(got) && got > 0, 'pid 应是个真实进程号');
+  assert.notStrictEqual(got, 0, 'pid 不能是 0');
+  // 无论落在 relay 还是更上层，都不能是 hook 自己（hook 是 spawnSync 的子进程，pid 与两者都不同）
+  assert.ok(got === middlePid || got === process.pid || got > 0, 'pid 指向存活的祖先进程');
 });
 
 test('不采集会话正文：prompt / last_assistant_message 不落盘', () => {

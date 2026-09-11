@@ -304,13 +304,15 @@ test('副行文案与颜色 class 跟随状态（含 unknown 不显示为完成�
 
 test('running 行显 mm:ss，done 行显相对时间', () => {
   const snap = snapshotOf([
-    rec({ sessionId: 'run', state: 'running', ts: T0 - (12 * 60 + 40) * 1000 }),
+    // 2 分 40 秒：必须小于 STALE_UNKNOWN_MS（3 分钟），否则新规则会把它判成 unknown ——
+    // 「running 超过 3 分钟没心跳就不再宣称正在跑」是 2026-09-11 修的真机缺陷，不是这里要绕开的。
+    rec({ sessionId: 'run', state: 'running', ts: T0 - (2 * 60 + 40) * 1000 }),
     rec({ sessionId: 'fin', state: 'done', ts: T0 - 2 * 60 * 1000 })
   ]);
   const p = mountPanel();
   p.push('agent-status:snapshot', snap);
   const timeOf = (id) => p.$(`.row[data-session-id="${id}"] .time`).textContent;
-  assert.strictEqual(timeOf('run'), '12:40', 'running 行时间不是 mm:ss');
+  assert.strictEqual(timeOf('run'), '02:40', 'running 行时间不是 mm:ss');
   assert.strictEqual(timeOf('fin'), t('time.minutesAgo', { n: 2 }), 'done 行时间不是相对时间');
   p.close();
 });
@@ -498,21 +500,18 @@ test('英文环境走 en 词表', () => {
   p.close();
 });
 
-test('快照带的 locale 压过 navigator.language，整块面板不混语言', () => {
-  // 生产里的真实错配：宿主 LANG=zh_CN（tool 取中文词），但面板 navigator 报 en-US。
-  // panel 各猜各的话，副行是中文、标题是英文 —— 同一块面板两种语言。
-  const p = mountPanel({ language: 'en-US' });
-  const snap = snapshotOf([rec({ sessionId: 'a', state: 'waiting', project: 'alpha', ts: T0 })]);
-  snap.locale = 'zh-CN';   // tool 侧随快照下发
-  p.push('agent-status:snapshot', snap);
-
-  const subline = p.$('.row .subline').textContent;
-  assert.strictEqual(subline, t('state.waiting'), '副行应是 tool 取好的中文词');
-  assert.strictEqual(p.$('#title').textContent, t('panel.title'),
-    '标题没跟随快照 locale —— 面板会中英混排');
-  assert.strictEqual(p.$('#footer').textContent, t('panel.footer.hint'));
-  assert.strictEqual(p.$('#empty-title').textContent, t('empty.title'));
-  assert.strictEqual(p.$('#install-claude').textContent, t('empty.installClaude'));
+test('locale 以 renderer 的 navigator.language 为准，并把真实语言回报给 tool', () => {
+  // 2026-09-11 真机缺陷反转：原来是「快照（tool）说了算」，但 tool 跑在宿主 fork 的
+  // utilityProcess 里，那里的 LANG 不代表界面语言——中文用户因此看到整块英文面板。
+  // renderer 的 navigator.language 才是权威；面板不再被 tool 覆盖，而是发事件纠正 tool。
+  const p = mountPanel({ language: 'zh-CN' });
+  const before = p.$('#title').textContent;
+  p.push('agent-status:snapshot', Object.assign({}, snapshotOf([]), { locale: 'en' }));
+  assert.strictEqual(p.$('#title').textContent, before,
+    '标题应保持 renderer 语言，不被 tool 的猜测覆盖');
+  const report = p.emitted.find((e) => e.name === 'agent-status:locale');
+  assert.ok(report, '应把真实 locale 回报给 tool');
+  assert.strictEqual(report.data.locale, 'zh-CN');
   p.close();
 });
 
