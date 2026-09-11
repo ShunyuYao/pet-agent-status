@@ -78,20 +78,15 @@ for (const [fixture, event, state] of MAPPING) {
 }
 
 // ---- 2. 落盘记录符合 schema:1 ----
-// 隔离自证的正确判据是「本轮没有新增/改动真实目录里的文件」，不是「目录不存在」——
-// 插件一旦被真实使用，该目录必然存在（2026-09-10 在用户机器上误报过）。
-// 快照在测试开始前拍，收尾时比对文件名与 mtime。
-function realStateDirSnapshot() {
-  const real = path.join(os.homedir(), '.local', 'state', 'pet-agent-status');
-  if (!fs.existsSync(real)) return { real, exists: false, entries: [] };
-  const entries = fs.readdirSync(real).sort().map((n) => {
-    let mtime = 0;
-    try { mtime = fs.statSync(path.join(real, n)).mtimeMs; } catch (_) { /* 竞态删除 */ }
-    return `${n}@${mtime}`;
-  });
-  return { real, exists: true, entries };
+// 隔离自证：测试**自己的数据**不得出现在真实路径里。
+// 判据不是「真实目录没变过」——维护者自己也在用这个插件，开发机上真实会话会持续写状态目录，
+// 那种守卫随机变红且说明不了问题（2026-09-11 实测）。按测试专属前缀查泄漏才抓得准。
+const TEST_ID_PREFIX = 'pet-as-test-';
+function leakedTestFiles() {
+  const dir = path.join(os.homedir(), '.local', 'state', 'pet-agent-status');
+  if (!fs.existsSync(dir)) return [];
+  try { return fs.readdirSync(dir).filter((n) => n.includes(TEST_ID_PREFIX)); } catch (_) { return []; }
 }
-const REAL_STATE_BEFORE = realStateDirSnapshot();
 
 test('落盘记录字段齐全且符合 PROTOCOL.md schema:1', () => {
   const dir = tmp();
@@ -215,9 +210,7 @@ test('恶意 session_id 被清洗，不穿越出状态目录', () => {
 
 // ---- 6. 隔离自证：全程没碰真实状态目录 ----
 test('测试期间未写入真实 ~/.local/state/pet-agent-status', () => {
-  const after = realStateDirSnapshot();
-  assert.deepStrictEqual(after.entries, REAL_STATE_BEFORE.entries,
-    `真实状态目录被污染: ${after.real}`);
+  assert.deepStrictEqual(leakedTestFiles(), [], '测试数据泄漏进了真实状态目录');
 });
 
 for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });

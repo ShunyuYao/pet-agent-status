@@ -9,7 +9,7 @@ const os = require('os');
 
 const LIB = path.join(__dirname, '..', 'lib');
 const stateFiles = require(path.join(LIB, 'state-files.js'));
-const { aggregate } = require(path.join(LIB, 'aggregate.js'));
+const { aggregate, DISMISSIBLE } = require(path.join(LIB, 'aggregate.js'));
 const { createPetLink } = require(path.join(LIB, 'pet-link.js'));
 const { createBadgeLink } = require(path.join(LIB, 'badge.js'));
 const deeplink = require(path.join(LIB, 'codex-deeplink.js'));
@@ -107,6 +107,10 @@ function createCollector(deps) {
   const psTree = (typeof d.psTree === 'function' || Array.isArray(d.psTree)) ? d.psTree : null;
   const jumpRunner = typeof d.jumpRunner === 'function' ? d.jumpRunner : undefined;
   const jumpErrors = new Map();   // sessionId → { text, at }
+  // sessionId → 用户点掉它的时刻。只影响**已结束**的行（done/idle/unknown），
+  // 该会话再有新事件就自动复现（判据是 ts 比较，见 aggregate#isDismissed）。
+  // 不落盘：这是「这一轮看过了」的临时视图状态，重启后重新按真实状态显示。
+  const dismissedAt = new Map();
   let psCache = null;             // { at, list } —— 见 PS_CACHE_MS
 
   // 进程表读一次给一轮里所有行共用。terminal-jump 接受「函数或数组」，这里给数组。
@@ -194,6 +198,19 @@ function createCollector(deps) {
     pushSettingsState(pet);
   }
 
+  // dismissedAt 转普通对象给 aggregate。顺带清掉「状态文件已经不在了」的会话记录，
+  // 否则这张表会随会话增长无限变长（同 jumpErrors 的 TTL 清理精神）。
+  function dismissMap() {
+    const out = {};
+    for (const [id, at] of dismissedAt) out[id] = at;
+    return out;
+  }
+  function pruneDismissed(records) {
+    if (dismissedAt.size === 0) return;
+    const alive = new Set(records.map((r) => r.sessionId));
+    for (const id of [...dismissedAt.keys()]) if (!alive.has(id)) dismissedAt.delete(id);
+  }
+
   function handleJump(pet, data) {
     const at = now();
     const sessionId = data && data.sessionId;
@@ -215,6 +232,9 @@ function createCollector(deps) {
     }
     if (result.ok) {
       jumpErrors.delete(sessionId);
+      // 点完就收起：只对已经没有后续的行生效（running/waiting 还在进行中，收起会丢失视野）。
+      // 记时刻而非布尔，让「又有新动静」能自动复现这一行。
+      if (row && DISMISSIBLE.has(row.state)) dismissedAt.set(sessionId, at);
     } else {
       // reason==='unavailable' 是「压根找不到终端」，与「osascript 报错」文案不同：
       // 前者用户该去别处找会话，后者是这次执行挂了，可以再试。
@@ -237,6 +257,7 @@ function createCollector(deps) {
     try {
       const at = now();
       const raw = readSnapshots(d.dir);
+      pruneDismissed(raw.records || []);   // 会话文件没了就忘掉它的已读记录
       const result = aggregate(raw, {
         now: at, isPidAlive: alive, t,
         canJump: makeCanJump(at),          // 判定实现在 lib/terminal-jump.js，这里只注入
@@ -244,6 +265,7 @@ function createCollector(deps) {
         // aggregate 保持零厂牌特判，只吃注入
         canJumpWithoutTty: (row) => deeplink.pickNavigator(row) != null,
         jumpErrors: activeJumpErrors(at),  // 上次跳转失败的行内错误条
+        dismissedAt: dismissMap(),         // 用户点掉的行（已结束态才生效）
         // App 正在跟随的会话在 focus 同级里优先（US-8；threadId 即 conversationId）
         isFollowing: (row) => !!(codexIpc && row.threadId && codexIpc.isFollowing(row.threadId))
       });
