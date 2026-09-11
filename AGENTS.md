@@ -59,6 +59,21 @@
   **registry 更新并经 GitHub API（非 raw，raw 有 CDN 缓存）回读确认实际内容**。
   漏过一次：0.5.1 的 CI 绿了但 registry 还停在 0.5.0，用户从市场装不到。
 
+## 并发纪律：写新代码一律开 worktree（硬规矩）
+
+代价换来的教训（2026-09-11）：两个会话同时在主检出的 main 上修同一个 bug，互相覆盖对方
+未提交的文件，一份读侧修复一度被冲掉——离线测试还全绿，靠事后逐行核对才发现。因此：
+
+- **写新代码、新功能、修 bug，一律先开独立 worktree**，不在主检出（`~/projects/pet-agent-status`
+  的 main）上直接改：`git worktree add ../pet-agent-status-<主题> -b <类型>/<主题>`，在
+  worktree 里开发、提交、跑门禁与 E2E。
+- **结束后合并回 main**：先在 worktree 里拉齐 main 解决冲突，合并后在**主检出**再跑一遍
+  离线套件 + 相关 E2E 确认没问题。
+- **确认没问题后删掉 worktree 与分支**：`git worktree remove ../pet-agent-status-<主题>`
+  + `git branch -d <分支>`，不留长期活着的旁支。
+- 主检出只做四类事：读代码、跑测试、合并、文档/规则类小改。多会话并行时尤其如此——
+  两个会话绝不同时在同一个检出（worktree 也算）里写文件。
+
 ## 环境与工程惯例
 
 - Node 22+，纯 JS（无 TypeScript、无构建步骤）；panel 为单文件 `panel/panel.html`（内联
