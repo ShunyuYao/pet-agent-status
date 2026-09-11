@@ -14,7 +14,7 @@
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `schema` | number | 是 | 恒 `1` |
-| `agent` | `'claude-code'`\|`'codex'` | 是 | 会话来源厂牌 |
+| `agent` | `'claude-code'`\|`'codex'`\|`'workbuddy'` | 是 | 会话来源厂牌（`'workbuddy'` 为 2026-09-12 加法，旧读者对未知厂牌按损坏跳过——可接受：旧版本插件本就不会有 workbuddy 写入方） |
 | `sessionId` | string | 是 | 会话唯一 id（Claude Code 用 hook 输入的 `session_id`） |
 | `cwd` | string | 是 | 会话工作目录（绝对路径） |
 | `project` | string | 是 | 展示名：`basename(cwd)` |
@@ -24,7 +24,7 @@
 | `lastEvent` | string | 是 | 产生本次写入的原始事件名（如 `UserPromptSubmit`/`Notification`/`Stop`） |
 | `ts` | number | 是 | 本次写入的 Unix 毫秒 |
 | `threadId` | string | 否 | Codex 线程 id（UUID，供 `codex://threads/<id>` 深链接） |
-| `source` | `'hook'`\|`'ipc'`\|`'reconcile'` | 否 | 数据来源，hook 写入缺省为 `'hook'` |
+| `source` | `'hook'`\|`'ipc'`\|`'reconcile'`\|`'poll'` | 否 | 数据来源，hook 写入缺省为 `'hook'`；`'poll'` = WorkBuddy SQLite 轮询（2026-09-12 加法） |
 | `form` | `'cli'`\|`'app'` | 否 | 会话形态；缺省按 `'cli'` 读。`'app'` = Codex App 任务（2026-09-11 起由 IPC 摄入写入；schema 仍为 1——选填字段做加法，旧读者按未知字段忽略，不破坏向后兼容） |
 | `title` | string | 否 | 会话标题兜底（US-9，schema:1 加法）。hook 在 `UserPromptSubmit` 时取 `prompt` **首个非空行、64 码点截断**写入；**首见定名**——同会话后续写入保留既有 title，不随后续 prompt 改名。这是「不采集会话正文」纪律的显式让步，边界即上述两条：只许首行 + 截断，任何路径都不许落完整 prompt。展示层优先级：Codex 线程目录 AI 标题 > 终端标签标题（两者均采集器现查、不落盘，见 fixtures/terminal-titles-facts.md）> 本字段 > `project` |
 | `since` | number | 否 | **活跃段起点**（Unix 毫秒）：本会话这一轮进入活跃组（`running`/`waiting`）的时刻。由 `writeStatus` 维护：前一记录也在活跃组则继承（工具调用、批准后恢复都不重置），否则等于本次 `ts`。面板 `mm:ss` 计时用它；陈旧/error/idle 推导仍用 `ts`（最后心跳）。缺省读者回退 `ts`（schema:1 加法，2026-09-11 修「工具调用把计时归零」缺陷时引入） |
@@ -126,6 +126,49 @@ running 的主信号不再来自 IPC 广播，而是线程 rollout 文件的新�
 IPC 仍是**可关闭的增强通道**（设置里可关，故障自动停用退回 Hooks）；
 未实录确认语义的事件一律忽略，**绝不映射成 done**（见 `fixtures/codex-ipc-facts.md` §5/§8）。
 
+## WorkBuddy 来源（source:'poll'，2026-09-12）
+
+腾讯 WorkBuddy（CodeBuddy 系办公 Agent 桌面 app）。事实与活体验证实录见
+`fixtures/workbuddy-facts.md`：官方权威状态就在 SQLite `~/.workbuddy/workbuddy.db`
+的 `sessions.status` 列，任务运行期间实时写库（§5 实录 pending→planning→working→completed），
+所以**单一信号：只读轮询该表**，不逆向 IPC、不拼多信号。
+
+记录形态：`agent:'workbuddy'`、`form:'app'`、`source:'poll'`、`tty:null`、
+`sessionId` = DB 的会话 UUID、`cwd`/`project` 取自 DB `cwd` 列（真路径，非品牌名兜底）、
+`pid` = WorkBuddy 内嵌 serve 进程 pid（`~/.workbuddy/sessions/<pid>.json` 心跳文件里
+最新鲜的一个；拿不到为 null）——采集器既有的「pid 死亡→error」推导因此免费生效。
+`title` 取 DB `custom_title` > `title`（AI 起的短名，非会话正文），走 `normalizeTitle`
+清洗与「首见定名」；首写时 DB 还没起名则后续写入自然补上。
+
+### DB status → state 映射（判据来源 fixtures/workbuddy-facts.md §3.2/§5，status 比较一律 LOWER）
+
+| DB status | 写入 state | 附加判据 |
+|---|---|---|
+| `working` / `planning` | `running` | `updated_at` 距今 ≤ 180s（运行期实测 1–5s 一写，180s = 36 倍余量；防 App 被强杀后 status 永远停在 working 的僵尸行） |
+| `pending` 且 `last_activity_at` **非空** | `waiting` | 语义是 awaiting_input（agent 等用户答复）。**新建**该行要求 `updated_at` ≤ 180s（不报旧闻）；已有记录则持续心跳维持 |
+| `pending` 且 `last_activity_at` **为空** | 不落盘 | 刚建的空会话（fixtures §5：创建时刻 last_activity_at=None），报 waiting 就是 0.8.2 修掉的那类「闲置误报」 |
+| `completed` | `done`（**只更新已存在的 poll 记录，绝不新建**） | 启动时扫到的历史 completed 是旧闻（同 IPC ended 的只更新规则） |
+| `failed` / `error` | `done`，`lastEvent` 记真实 status（只更新不新建） | 面板无失败态；done 驻留让用户看见后点进去了解结果 |
+| `terminated` / `archived` | `ended`（只更新不新建） | 用户自己取消/归档的，无需驻留提醒 |
+| 其余 / 未知 status | 忽略 | 未实录语义不猜，**绝不映射为 done**（同 IPC 纪律） |
+
+### 长期约束
+
+- **可写性**：只写 `source:'poll'` 的记录（或不存在的）；hook/ipc/reconcile 记录一律不碰。
+  心跳节流 ≥20s 刷新 `ts`（防 3min stale 兜底误伤长任务），`since` 继承由 `writeStatus`
+  统一维护（计时不归零，同 0.8.3 教训）。
+- **全失败静默降级**：DB 文件不存在（没装 WorkBuddy）→ 无行为；`node:sqlite` 不可用
+  （宿主 Node < 22.13）→ 模块整体停用；**DB 锁错误按常态跳过本轮**、沿用上轮状态——
+  fixtures §5 实录 App 启停窗口期会连续数秒锁死，据此判「不可用」就是误报。
+  每轮 open readOnly → 查 → close，不持久连接（避免占着句柄妨碍 App 迁移 schema）。
+- **跳转**：`workbuddy://chat/<sessionId>`（asar 实录路由，`/task/<id>` 的 deeplink 形态；
+  id 必须过 UUID 校验才拼 URL，同 codex 深链接白名单精神）。判定唯一实现仍在
+  `codex-deeplink.js#pickNavigator`（workbuddy 分支）。
+- 内部存储无稳定性承诺（同 Codex rollout 纪律）：schema 变了查询报错 → 静默降级，
+  绝不 crash 采集器；查询只 SELECT 白名单列，`deleted_at IS NULL`，LIMIT 20。
+- 本来源 v1 无独立开关（没装 WorkBuddy 即自然无行为）；将来要加开关走 storage 键
+  `workbuddyEnabled`，别复用 codex 的 `codexIpcEnabled`。
+
 ## 路径覆盖约定（测试隔离）
 
 | 环境变量 | 覆盖对象 | 默认 |
@@ -134,3 +177,4 @@ IPC 仍是**可关闭的增强通道**（设置里可关，故障自动停用退
 | `PET_AS_CLAUDE_SETTINGS` | Claude Code 配置 | `~/.claude/settings.json` |
 | `PET_AS_CODEX_HOOKS` | Codex CLI hooks 配置 | `$CODEX_HOME/hooks.json`，`CODEX_HOME` 缺省 `~/.codex` |
 | `CODEX_HOME` | Codex 主目录（hooks 配置与 IPC socket 同源认它） | `~/.codex` |
+| `PET_AS_WORKBUDDY_HOME` | WorkBuddy 数据目录（DB 与 serve 心跳文件同源认它） | `~/.workbuddy` |

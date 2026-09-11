@@ -133,7 +133,8 @@ function collectorOn(dir, over) {
     // 且本套件的 App 行用的是实录 conversationId——在维护者机器上真能查到标题
     threadTitles: { lookup: () => null },
     terminalTitles: { lookup: () => null },   // 同理：默认实现 spawn osascript 查真实终端
-    rolloutActivity: { activeThreads: () => new Map() }   // 同理：默认实现 stat 真实 ~/.codex/sessions
+    rolloutActivity: { activeThreads: () => new Map() },   // 同理：默认实现 stat 真实 ~/.codex/sessions
+    workbuddySource: { tick: () => {} }   // 同理：默认实现打开真实 ~/.workbuddy/workbuddy.db
   }, over));
 }
 
@@ -592,7 +593,8 @@ function leakedBackups() {
     const m = mockPet();
     const c = collectorOn(dir, {
       now: () => clock, createCodexIpc: f.factory,
-      rolloutActivity: createRolloutActivity({ codexHome: home, now: () => clock })
+      rolloutActivity: createRolloutActivity({ codexHome: home, now: () => clock }),
+      workbuddySource: { tick: () => {} }
     });
     await c.start(m.pet);
     const rows = m.state.snapshots().pop().data.rows;
@@ -608,6 +610,45 @@ function leakedBackups() {
     c.tick(m.pet);
     f.instances[0].deps.onReadState(cid, false);
     assert.strictEqual(sf.readStatus(cid, dir).state, 'ended', '活动停了，已读该照常转 ended');
+    await c.stop(m.pet);
+  });
+
+  await test('WorkBuddy 接线：真 SQLite 链条 → 快照出行 → 深链接跳转', async () => {
+    let sqlite = null;
+    try { sqlite = require('node:sqlite'); } catch (_) { sqlite = null; }
+    if (!sqlite) { console.log('    （本机 Node 无 node:sqlite，跳过）'); return; }
+    const dir = tmp();
+    const home = tmp();
+    const wid = '3dc39631-091f-4b36-9e02-2ccfef2171c2';
+    let clock = T0;
+    const db = new sqlite.DatabaseSync(path.join(home, 'workbuddy.db'));
+    db.exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, cwd TEXT NOT NULL, title TEXT,
+      custom_title TEXT, status TEXT NOT NULL, created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL, deleted_at INTEGER, last_activity_at INTEGER)`);
+    db.prepare('INSERT INTO sessions (id, cwd, title, custom_title, status, created_at, updated_at, last_activity_at) VALUES (?,?,?,?,?,?,?,?)')
+      .run(wid, '/Users/x/wb-proj', null, null, 'working', T0 - 5000, T0 - 1000, T0 - 1000);
+    db.close();
+    const { createWorkbuddySource } = require(path.join(ROOT, 'lib', 'workbuddy-source.js'));
+    const opened = [];
+    const c = collectorOn(dir, {
+      now: () => clock,
+      workbuddySource: createWorkbuddySource({ home, dir, now: () => clock }),
+      execFile: (cmd, args) => { opened.push([cmd, ...args]); }
+    });
+    const m = mockPet();
+    await c.start(m.pet);
+    const rows = m.state.snapshots().pop().data.rows;
+    const wb = rows.find((r) => r.sessionId === wid);
+    assert.ok(wb, 'WorkBuddy 运行中会话没进快照');
+    assert.strictEqual(wb.agent, 'workbuddy');
+    assert.strictEqual(wb.state, 'running');
+    assert.strictEqual(wb.form, 'app');
+    assert.strictEqual(wb.project, 'wb-proj', 'project 取 DB cwd 的 basename，不是品牌名兜底');
+    assert.ok(wb.canJump, '无 tty 但有合法 UUID，深链接可点');
+    // 跳转走 workbuddy://chat/<id>（asar 实录路由）
+    const r = c.handleJump(m.pet, { sessionId: wid });
+    assert.strictEqual(r.ok, true);
+    assert.deepStrictEqual(opened.pop(), ['open', `workbuddy://chat/${wid}`]);
     await c.stop(m.pet);
   });
 

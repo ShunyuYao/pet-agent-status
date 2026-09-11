@@ -4,5 +4,6 @@
   "description": "dev deps for offline tests (jsdom)",
   "devDependencies": {
     "jsdom": "^25.0.0"
-  }
+  },
+  "version": "0.9.0"
 }

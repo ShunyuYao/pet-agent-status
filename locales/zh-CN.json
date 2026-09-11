@@ -20,6 +20,7 @@
   "empty.uninstallCodex": "移除 Codex 钩子",
   "jump.failed": "跳转失败：{reason}",
   "jump.noCodexApp": "打不开 Codex App，请确认已安装并启动",
+  "jump.noWorkbuddyApp": "打不开 WorkBuddy，请确认已安装并启动",
   "jump.unavailable": "找不到这个会话的终端",
   "panel.close": "关闭",
   "panel.footer.hint": "点击会话跳回终端 · 完成时宠物会提醒你",

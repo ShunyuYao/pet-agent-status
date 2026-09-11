@@ -20,6 +20,7 @@
   "empty.uninstallCodex": "Remove Codex hooks",
   "jump.failed": "Jump failed: {reason}",
   "jump.noCodexApp": "Cannot open Codex App — make sure it is installed and running",
+  "jump.noWorkbuddyApp": "Cannot open WorkBuddy — make sure it is installed and running",
   "jump.unavailable": "Can't find the terminal for this session",
   "panel.close": "Close",
   "panel.footer.hint": "Click a session to jump back · your pet pings you when it's done",

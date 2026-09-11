@@ -475,7 +475,8 @@ function makeTool(dir, over) {
   const collector = tool.createCollector(Object.assign({
     dir, now: () => T0, isPidAlive: () => true, locale: 'zh-CN',
     settingsFile: path.join(dir, 'settings.json'),
-    rolloutActivity: { activeThreads: () => new Map() }   // 隔离：默认实现 stat 真实 ~/.codex/sessions
+    rolloutActivity: { activeThreads: () => new Map() },   // 隔离：默认实现 stat 真实 ~/.codex/sessions
+    workbuddySource: { tick: () => {} }   // 同理：默认实现打开真实 ~/.workbuddy/workbuddy.db
   }, over));
   return {
     pet, collector, emitted, handlers,
