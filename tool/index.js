@@ -15,6 +15,7 @@ const { createBadgeLink } = require(path.join(LIB, 'badge.js'));
 const deeplink = require(path.join(LIB, 'codex-deeplink.js'));
 const { createCodexIpc } = require(path.join(LIB, 'codex-ipc.js'));
 const { createCodexAppIngest } = require(path.join(LIB, 'codex-app-ingest.js'));
+const { createRolloutActivity } = require(path.join(LIB, 'codex-rollout-activity.js'));
 const { createCodexThreadTitles } = require(path.join(LIB, 'codex-thread-titles.js'));
 const { createTerminalTitles } = require(path.join(LIB, 'terminal-titles.js'));
 const { createNodeI18n } = require(path.join(LIB, 'i18n.js'));
@@ -91,6 +92,12 @@ function createCollector(deps) {
   // 工厂可注入：测试绝不碰真 socket（默认路径是真实 ~/.codex/ipc/ipc.sock）。
   const ipcFactory = typeof d.createCodexIpc === 'function' ? d.createCodexIpc : createCodexIpc;
   const ingest = createCodexAppIngest({ dir: d.dir, now });
+  // rollout 活动探测（PROTOCOL.md「rollout 活动信号」）：App 任务 running 的主信号。
+  // 可注入：测试用假目录，绝不 stat 真实 ~/.codex/sessions。
+  const rollout = d.rolloutActivity || createRolloutActivity({ codexHome: d.codexHome, now });
+  // 上一轮 tick 看到的活动线程集合。read-state 广播在两轮 tick 之间到达，
+  // 用它豁免「提交时刻的已读→ended 误翻」（≤2s 陈旧 vs 30s 活动窗，够用）。
+  let rolloutActive = new Map();
   // 会话标题解析（US-9）：Codex 线程目录里 AI 生成的标题按 threadId 查（App 与 CLI 共库，
   // fixtures/codex-ipc-facts.md §9）。可注入：测试绝不读真实 ~/.codex（默认走 CODEX_HOME）。
   const threadTitles = d.threadTitles || createCodexThreadTitles({ codexHome: d.codexHome, now });
@@ -173,7 +180,7 @@ function createCollector(deps) {
         socketPath: d.codexIpcPath || defaultCodexIpcPath(),
         // 摄入回调落状态文件，下一轮 tick（≤2s）自然进快照/联动，不在回调里强推
         onActivity: (id) => ingest.onActivity(id),
-        onReadState: (id, hasUnread) => ingest.onReadState(id, hasUnread),
+        onReadState: (id, hasUnread) => ingest.onReadState(id, hasUnread, (tid) => rolloutActive.has(String(tid).toLowerCase())),
         // 连接状态变了立刻告诉设置视图（ready/disabled 的翻面不该等 tick）
         onStatus: () => pushSettingsState(pet)
       });
@@ -272,6 +279,20 @@ function createCollector(deps) {
   function tick(pet) {
     try {
       const at = now();
+      // rollout 活动摄入放在读快照**之前**：本轮写下的 running 本轮就进面板。
+      // 与 IPC 增强共用同一开关（关掉增强 = 关掉全部 App 摄入，PROTOCOL.md）。
+      // 归属判据（分不清 App/CLI 的活动不落盘）：已有摄入系记录（ingest 内部判）
+      // 或 App 正在跟随该线程（following 是纯 App 侧信号）。
+      if (ipcEnabled !== false) {
+        try {
+          rolloutActive = rollout.activeThreads();
+          for (const id of rolloutActive.keys()) {
+            ingest.onRolloutActivity(id, (tid) => !!(codexIpc && codexIpc.isFollowing(tid)));
+          }
+        } catch (_) { rolloutActive = new Map(); }   // 探测挂了不打死采集轮
+      } else if (rolloutActive.size) {
+        rolloutActive = new Map();
+      }
       const raw = readSnapshots(d.dir);
       pruneDismissed(raw.records || []);   // 会话文件没了就忘掉它的已读记录
       const result = aggregate(raw, {

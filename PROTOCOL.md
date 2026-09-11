@@ -94,14 +94,34 @@ App 任务与 CLI 会话在协议上同构，差别有三处：
 
 | IPC 广播 | 写入 state | 语义依据 |
 |---|---|---|
-| `thread-queued-followups-changed`（带 `conversationId`） | `running` | 实录：提交任务时刻发出（队列清空/变化=该会话有新活动）。属启发式，误报由采集器 3min 无新事件转 unknown 兜底 |
+| `thread-queued-followups-changed`（带 `conversationId`） | `running` | ⚠️ 2026-09-11 第四轮实测反证（facts §10.1）：**普通提交时刻不发**，不可当 running 的主依据；映射保留（真发了仍是活动证据），running 的主信号改为 rollout 活动（见下节） |
 | `thread-read-state-changed` 且 `hasUnreadTurn === true` | `done` | 实录×2 + 反例×1：仅在回合结束时刻发出，运行中不发（时序实验见 facts §8）。**这是唯一允许映射为 done 的 IPC 信号** |
-| `thread-read-state-changed` 且 `hasUnreadTurn === false` | `ended`（仅更新已存在的 `source:'ipc'` 记录，绝不新建） | 用户在 App 里读过了 = 已结束展示；对没见过的会话新建一条 `ended` 是在报旧闻 |
+| `thread-read-state-changed` 且 `hasUnreadTurn === false` | `ended`（仅更新已存在的摄入系记录，绝不新建；**该线程 rollout 活动新鲜时跳过**） | 用户在 App 里读过了 = 已结束展示；对没见过的会话新建一条 `ended` 是在报旧闻。实测（facts §10.1）提交时刻 App 会发一条 false（用户正看着线程），若不带活动豁免会把刚开跑的任务当场翻成已结束 |
 | `thread-stream-following-changed` | 不落盘 | 只进内存 following 集合，供聚焦（focus）同级优先 |
 | 其余（含 `thread-stream-state-changed`） | 忽略 | 实录证实被动外部 client **收不到** stream-state 广播（facts §8）；未实录语义一律不猜 |
 
 摄入保护：同 `sessionId` 已存在 `source` 非 `'ipc'` 的记录（CLI hooks 写的，含 tty 更富）时，
 IPC 摄入**跳过不覆盖**。IPC 记录的清理走既有 idle 淡出与 24h 文件清理，无独立生命周期。
+
+### rollout 活动信号 → running（source:'reconcile'，2026-09-11 修「运行中看不到 App 任务」缺陷引入）
+
+running 的主信号不再来自 IPC 广播，而是线程 rollout 文件的新鲜度（facts §10.2）：
+`$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<时间戳>-<threadId>.jsonl` 在任务运行期间每隔
+约 2–12 秒持续追加，文件名自带 threadId，无需读内容。
+
+- **判据（三条同时成立才写）**：① rollout 文件 mtime 距今 ≤ 30s；② 该 threadId **不属于**
+  hook 系记录（同 sessionId 已有 `source` 非 `'ipc'`/`'reconcile'` 的记录 = CLI hooks 在管，跳过）；
+  ③ 该线程已有摄入系记录（ipc/reconcile 写过）**或** 正被 App 跟随（following 信号）——
+  App 与 CLI 共用 sessions 目录，缺这条会把没装 hooks 的 CLI 会话误标成 App 任务。
+- 写入内容同 App 摄入（`form:'app'`、tty null、品牌名 project），`source:'reconcile'`、
+  `lastEvent:'reconcile:rollout-activity'`。
+- **兼作心跳**：活动持续期间按节流（≥20s）刷新记录 `ts`，使长任务不落入采集器 3min
+  stale→unknown 兜底；`since` 继承规则不变（mm:ss 连续计时）。
+- 摄入可写性判据由「existing.source === 'ipc'」放宽为「∈ {'ipc','reconcile'}」：
+  两者同属 App 摄入系，IPC 的 done/ended 必须能覆盖 reconcile 写的 running。
+- 扫描只读、全失败路径静默降级（内部存储无稳定性承诺，同标题读取纪律）；只扫今天与昨天
+  两个日期目录（覆盖跨午夜边界），不递归全库。
+- 与 IPC 增强共用同一开关（storage 键 `codexIpcEnabled`）：关掉增强 = 关掉全部 App 摄入。
 
 IPC 仍是**可关闭的增强通道**（设置里可关，故障自动停用退回 Hooks）；
 未实录确认语义的事件一律忽略，**绝不映射成 done**（见 `fixtures/codex-ipc-facts.md` §5/§8）。

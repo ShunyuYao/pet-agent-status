@@ -168,6 +168,91 @@ test('落盘失败（目录是只读文件占位）不抛：摄入绝不打死�
   });
 });
 
+// ---- ⑧ rollout 活动 → running（2026-09-11 修「运行中看不到 App 任务」，facts §10）----
+// 注意：以下用例直调 ingest.onRolloutActivity / onReadState(…, isActive) 不算「直调内部函数自证」——
+// 它们就是模块对外契约面（tool/index.js 生产调用的同名入口），输入是真实 stat 结果的等价物。
+
+test('rollout 活动 + 已有摄入系记录 → running（source reconcile，过协议校验）', () => {
+  const dir = tmp();
+  const r = rig(dir);
+  r.feed(turnDoneFrame(CID, true));   // 真实序列：上一回合的 done 记录还在
+  const ingest = createCodexAppIngest({ dir, now: () => T0 + 1000 });
+  ingest.onRolloutActivity(CID);      // 不给 canClaim：已有记录本身就是归属证据
+  const rec = sf.readStatus(CID, dir);
+  assert.strictEqual(sf.validateRecord(rec), null);
+  assert.strictEqual(rec.state, 'running');
+  assert.strictEqual(rec.source, 'reconcile');
+  assert.strictEqual(rec.form, 'app');
+  assert.strictEqual(rec.lastEvent, 'reconcile:rollout-activity');
+});
+
+test('rollout 活动 + 陌生线程：canClaim=false 一个文件都不落；following 佐证才落', () => {
+  const dir = tmp();
+  const ingest = createCodexAppIngest({ dir, now: () => T0 });
+  ingest.onRolloutActivity(CID, () => false);   // 分不清 App/CLI，不落盘（绝不误标厂牌）
+  assert.strictEqual(sf.readStatus(CID, dir), null);
+  ingest.onRolloutActivity(CID, () => true);    // App 正在跟随 = 归属证据
+  assert.strictEqual(sf.readStatus(CID, dir).state, 'running');
+});
+
+test('rollout 活动绝不覆盖 hook 记录（CLI 会话在 hooks 管辖下）', () => {
+  const dir = tmp();
+  sf.writeStatus({ agent: 'codex', sessionId: CID, cwd: '/Users/me/p', tty: '/dev/ttys009',
+    pid: 4242, state: 'running', lastEvent: 'UserPromptSubmit', ts: T0 - 1000, threadId: CID }, dir);
+  const ingest = createCodexAppIngest({ dir, now: () => T0 });
+  ingest.onRolloutActivity(CID, () => true);
+  const rec = sf.readStatus(CID, dir);
+  assert.strictEqual(rec.source, 'hook');
+  assert.strictEqual(rec.tty, '/dev/ttys009', 'tty 丢了 = 跳转入口被摄入弄坏');
+});
+
+test('心跳节流：新鲜 running 不重写；过节流窗刷新 ts 且 since 连续（mm:ss 不归零）', () => {
+  const dir = tmp();
+  let clock = T0;
+  const ingest = createCodexAppIngest({ dir, now: () => clock });
+  ingest.onRolloutActivity(CID, () => true);
+  const first = sf.readStatus(CID, dir);
+  assert.strictEqual(first.since, T0, '首写 = 活跃段起点');
+  clock = T0 + 5000;
+  ingest.onRolloutActivity(CID, () => true);   // 20s 内：不重写
+  assert.strictEqual(sf.readStatus(CID, dir).ts, T0, '节流窗内不该重写');
+  clock = T0 + 25000;
+  ingest.onRolloutActivity(CID, () => true);   // 过窗：刷心跳
+  const rec = sf.readStatus(CID, dir);
+  assert.strictEqual(rec.ts, T0 + 25000, '心跳该刷新 ts（防 3min stale 兜底误伤长任务）');
+  assert.strictEqual(rec.since, T0, 'since 必须继承——计时归零缺陷不许在 App 行复发');
+});
+
+test('IPC 的 done 能覆盖 reconcile 写的 running（同属摄入系）', () => {
+  const dir = tmp();
+  const ingest = createCodexAppIngest({ dir, now: () => T0 });
+  ingest.onRolloutActivity(CID, () => true);
+  rig(dir).feed(turnDoneFrame(CID, true));   // 真帧走完整链路
+  const rec = sf.readStatus(CID, dir);
+  assert.strictEqual(rec.state, 'done');
+  assert.strictEqual(rec.source, 'ipc');
+});
+
+test('提交时刻的已读帧（false）：rollout 活动中 → 不翻 ended；活动停了 → 照常 ended', () => {
+  const dir = tmp();
+  let active = true;
+  const ingest = createCodexAppIngest({ dir, now: () => T0 });
+  ingest.onRolloutActivity(CID, () => true);
+  // facts §10.1 实录：提交时刻 App 发 hasUnreadTurn:false（用户正看着线程）
+  ingest.onReadState(CID, false, () => active);
+  assert.strictEqual(sf.readStatus(CID, dir).state, 'running', '正在跑，「已读」不算结束');
+  active = false;
+  ingest.onReadState(CID, false, () => active);
+  assert.strictEqual(sf.readStatus(CID, dir).state, 'ended', '活动停了，已读照常收尾');
+});
+
+test('rollout 活动收到非 UUID 形态 id → 不落盘', () => {
+  const dir = tmp();
+  const ingest = createCodexAppIngest({ dir, now: () => T0 });
+  for (const bad of ['not-a-uuid', '../../etc/passwd', '']) ingest.onRolloutActivity(bad, () => true);
+  assert.deepStrictEqual(fs.readdirSync(dir).filter((n) => n.endsWith('.json')), []);
+});
+
 // ---- ⑦ 隔离自证 ----
 test('测试全程未触碰真实状态目录', () => {
   // 只造临时目录；真实目录若存在，本轮不该新增/修改其中文件（存在本身不算失败）
