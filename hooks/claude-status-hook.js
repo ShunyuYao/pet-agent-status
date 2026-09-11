@@ -22,7 +22,9 @@ function handle(raw) {
   const { resolveTty, resolveAgentPid } = require(path.join(LIB, 'tty-detect.js'));
 
   const event = JSON.parse(raw);
-  const state = stateForEvent(event.hook_event_name);
+  // 传完整事件：Notification 要靠 matcher/message 区分「等批准」与「闲置提醒」
+  // （见 lib/claude-events.js 的 isIdleNotification）。
+  const state = stateForEvent(event.hook_event_name, event);
   if (state === null) return; // 未知事件：不写、不报错
 
   // session_id / cwd 是协议必填项的来源，缺了写出来也是坏记录，不如不写

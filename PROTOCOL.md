@@ -38,9 +38,20 @@
 | `SessionStart` | `running` |
 | `UserPromptSubmit` | `running` |
 | `PreToolUse` / `PostToolUse` | `running` |
-| `Notification`（权限请求/等待输入） | `waiting` |
+| `Notification` **且是权限请求** | `waiting` |
+| `Notification` **且是闲置提醒**（`matcher:'idle_prompt'`，或 message 含「waiting for your input」） | `running` |
 | `Stop` | `done` |
 | `SessionEnd` | `ended` |
+
+**`Notification` 必须按语义分流，不许一律当 `waiting`**（2026-09-11 真机缺陷，
+实录根因见 `fixtures/waiting-accuracy-facts.md`）：它是通用通知事件，官方 matcher 至少有
+`permission_prompt`（真在等批准）与 `idle_prompt`（闲置约 60s，语义是「等你说话」）两类。
+把闲置提醒也写成 `waiting`，面板就会对一个只是没人理的会话显示「等待你批准」。
+
+判别优先级：先认结构化的 `matcher`/`notification_type`，缺席才退回 `message` 文本启发式。
+**方向性必须保守——拿不准一律按 `waiting`**：漏报会让用户错过真正在等他批准的会话
+（那正是本插件存在的理由），误报只是多看一眼。故只在**确认是闲置类**时才降级，
+绝不反向猜测。官方未公布逐字 message 字符串，所以文本判据只能是兜底而非主判据。
 
 Codex CLI 事件映射（US-006 按本机实测事实补全，来源 `fixtures/codex-hooks-facts.md`：
 codex-cli 0.153.4 实测。证据分级：【实录】= 真实会话抓到 payload；【二进制确认】= CLI 二进制
