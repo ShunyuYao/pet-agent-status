@@ -267,10 +267,17 @@ test('Scheme 未注册与一般失败分成两种 reason（文案不同）', () 
 });
 
 // ---- ⑥ 导航二选一 ----
-test('App 任务（无 tty + 有 threadId）→ deeplink', () => {
-  const n = dl.pickNavigator({ agent: 'codex', tty: null, threadId: '01a08ab6-557f-77b3-bc37-3553f712b2e0' });
+test('App 任务（form app + 无 tty + 有 threadId）→ deeplink', () => {
+  const n = dl.pickNavigator({ agent: 'codex', form: 'app', tty: null, threadId: '01a08ab6-557f-77b3-bc37-3553f712b2e0' });
   assert.strictEqual(n.kind, 'deeplink');
   assert.ok(n.url.startsWith('codex://threads/'));
+});
+
+test('Codex CLI 会话（非 app 形态）即便有 threadId 且丢了 tty 也不给深链接（v0.5.0 CI 回归）', () => {
+  // CLI 会话的 threadId 是给「有 tty 时」将来增强用的；tty 丢了走深链接会跳进 App 里不存在的任务页
+  for (const form of [undefined, 'cli']) {
+    assert.strictEqual(dl.pickNavigator({ agent: 'codex', form, tty: null, threadId: '01a08ab6-557f-77b3-bc37-3553f712b2e0' }), null, String(form));
+  }
 });
 
 test('有 tty 的会话（含 Codex CLI）→ 走既有 tty 链路', () => {
