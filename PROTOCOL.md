@@ -26,6 +26,7 @@
 | `threadId` | string | 否 | Codex 线程 id（UUID，供 `codex://threads/<id>` 深链接） |
 | `source` | `'hook'`\|`'ipc'`\|`'reconcile'` | 否 | 数据来源，hook 写入缺省为 `'hook'` |
 | `form` | `'cli'`\|`'app'` | 否 | 会话形态；缺省按 `'cli'` 读。`'app'` = Codex App 任务（2026-09-11 起由 IPC 摄入写入；schema 仍为 1——选填字段做加法，旧读者按未知字段忽略，不破坏向后兼容） |
+| `since` | number | 否 | **活跃段起点**（Unix 毫秒）：本会话这一轮进入活跃组（`running`/`waiting`）的时刻。由 `writeStatus` 维护：前一记录也在活跃组则继承（工具调用、批准后恢复都不重置），否则等于本次 `ts`。面板 `mm:ss` 计时用它；陈旧/error/idle 推导仍用 `ts`（最后心跳）。缺省读者回退 `ts`（schema:1 加法，2026-09-11 修「工具调用把计时归零」缺陷时引入） |
 
 未知字段读取时忽略不报错；缺必填字段的文件按损坏跳过（不 crash 采集器）。
 
