@@ -1,7 +1,7 @@
 {
   "id": "pet-agent-status",
   "name": "Agent 会话状态",
-  "version": "0.8.2",
+  "version": "0.8.3",
   "apiVersion": 1,
   "activation": "opt-in",
   "kind": [

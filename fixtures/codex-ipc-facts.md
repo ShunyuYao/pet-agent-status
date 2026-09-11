@@ -113,3 +113,31 @@
 （resume 列表标题是展示时临时派生；`~/.claude/sessions/<pid>.json` 的 name 是
 `claude-39` 式派生编号，nameSource:'derived'）。本机能拿到的最好等价物 = 首条 prompt
 首行截断，由 hook 经 `title` 字段写入（PROTOCOL.md）。
+
+## 10. 2026-09-11 第四轮实测：提交时刻不发 queued-followups（§8 映射的反证）
+
+> 探针方式同 §3（被动只读），用户在 Codex App 里真实提交并跑完两个任务（同一既有线程的
+> 后续回合），全程抓包 + 状态目录 1s 轮询对照。原始时间线存维护者本机会话记录。
+
+### 10.1 普通提交时刻被动通道零广播【实录·反证】
+
+- 任务一（~13:45Z 提交）：提交时刻**没有任何广播**（`thread-queued-followups-changed`
+  未发、`query-cache-invalidate` 未发）；直到 13:46:53Z 结束才来
+  `thread-read-state-changed hasUnreadTurn:true`。
+- 任务二（13:56Z 提交）：同样无 queued-followups；提交时刻反而实录到
+  **`thread-read-state-changed hasUnreadTurn:false`**（用户正看着线程 = 已读），
+  状态目录对照显示插件据此把既有记录翻成了 `ended`。
+
+结论：**§8.2 的「提交任务时刻发 queued-followups」不可复现，不能再当 running 的依据**
+（当时或为特殊场景/版本行为漂移）。后果即用户实测缺陷「运行中看不到会话、结束才出现」。
+`hasUnreadTurn:true` → done 的映射两轮均再次验证成立。
+
+### 10.2 rollout 文件是可靠的运行中活动信号【实录】
+
+- 线程 rollout 文件 `~/.codex/sessions/YYYY/MM/DD/rollout-<时间戳>-<threadId>.jsonl`
+  在任务运行期间**每隔约 2–12 秒持续追加**（实录 30 秒内 572KB→671KB，mtime 跟随）；
+  文件名自带 threadId（UUID），无需读内容即可归属。
+- App 与 CLI 共用该目录（§9 已证共库）：CLI 会话的 rollout 同样在此追加，
+  **仅凭 rollout 新鲜度分不出 App/CLI**——归属需叠加其它证据
+  （已有 ipc 系记录、或 App 的 following 信号）。
+- 内部存储、无稳定性承诺：消费必须全失败路径静默降级（同 §9 标题读取的纪律）。

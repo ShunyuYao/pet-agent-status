@@ -132,7 +132,8 @@ function collectorOn(dir, over) {
     // 标题解析器必须注入：默认实现会读真实 ~/.codex 线程目录（隔离红线），
     // 且本套件的 App 行用的是实录 conversationId——在维护者机器上真能查到标题
     threadTitles: { lookup: () => null },
-    terminalTitles: { lookup: () => null }   // 同理：默认实现 spawn osascript 查真实终端
+    terminalTitles: { lookup: () => null },   // 同理：默认实现 spawn osascript 查真实终端
+    rolloutActivity: { activeThreads: () => new Map() }   // 同理：默认实现 stat 真实 ~/.codex/sessions
   }, over));
 }
 
@@ -563,6 +564,50 @@ function leakedBackups() {
     assert.ok(app, 'App 任务没进快照');
     assert.strictEqual(app.form, 'app');
     assert.strictEqual(app.state, 'running');
+    await c.stop(m.pet);
+  });
+
+  // ---- 5.7 rollout 活动接线（2026-09-11 修「运行中看不到 App 任务」，facts §10）----
+  // 走真实 stat 链路：临时 codexHome 里造 rollout 文件（用户在 App 提交任务后系统的
+  // 真实产物等价物）→ tick → 快照出 running 行；再验「提交时刻已读帧」的豁免接线。
+  await test('rollout 文件新鲜 → tick 出 running App 行；已读帧在活动中不翻 ended', async () => {
+    const dir = tmp();
+    const home = tmp();
+    const cid = '01a090b0-117a-77b1-9e02-2ccfef2171c2';
+    let clock = T0;
+    // 造 rollout 文件（今天的日期目录按注入时钟算）
+    const dday = new Date(T0);
+    const dayDir = path.join(home, 'sessions', String(dday.getFullYear()),
+      String(dday.getMonth() + 1).padStart(2, '0'), String(dday.getDate()).padStart(2, '0'));
+    fs.mkdirSync(dayDir, { recursive: true });
+    const rollout = path.join(dayDir, `rollout-2026-09-11T21-37-33-${cid}.jsonl`);
+    fs.writeFileSync(rollout, '');
+    fs.utimesSync(rollout, (T0 - 3000) / 1000, (T0 - 3000) / 1000);
+    // 上一回合留下的摄入系记录（实测线上形态：ended / ipc:turn-read）= 归属证据
+    sf.writeStatus({ agent: 'codex', form: 'app', sessionId: cid, threadId: cid, cwd: '',
+      project: 'Codex App', tty: null, pid: null, state: 'ended', lastEvent: 'ipc:turn-read',
+      source: 'ipc', ts: T0 - 60000 }, dir);
+    const f = fakeIpcFactory();
+    const { createRolloutActivity } = require(path.join(ROOT, 'lib', 'codex-rollout-activity.js'));
+    const m = mockPet();
+    const c = collectorOn(dir, {
+      now: () => clock, createCodexIpc: f.factory,
+      rolloutActivity: createRolloutActivity({ codexHome: home, now: () => clock })
+    });
+    await c.start(m.pet);
+    const rows = m.state.snapshots().pop().data.rows;
+    const app = rows.find((r) => r.sessionId === cid);
+    assert.ok(app, 'rollout 活动没让 App 行出现');
+    assert.strictEqual(app.state, 'running', '运行中必须显示 running（本缺陷的核心断言）');
+    assert.strictEqual(app.form, 'app');
+    // 提交时刻 App 发已读帧（facts §10.1 实录）：活动中不许翻 ended
+    f.instances[0].deps.onReadState(cid, false);
+    assert.strictEqual(sf.readStatus(cid, dir).state, 'running', '已读帧把开跑的任务翻成 ended 了');
+    // 活动停止（时钟越过 30s 窗）后 tick 一轮清活动集，已读帧才照常收尾
+    clock = T0 + 60000;
+    c.tick(m.pet);
+    f.instances[0].deps.onReadState(cid, false);
+    assert.strictEqual(sf.readStatus(cid, dir).state, 'ended', '活动停了，已读该照常转 ended');
     await c.stop(m.pet);
   });
 
