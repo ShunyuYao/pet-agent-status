@@ -501,3 +501,40 @@ test('测试期间未修改真实 ~/.claude/settings.json', () => {
 
 for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
 console.log(`\nclaude-installer-test: ${passed} passed`);
+
+// ---- 真机缺陷回归（2026-09-11）：过时解释器条目必须被替换而非堆积 ----
+test('重装会替换掉「本插件写的但解释器已过时」的条目，不追加第二条', () => {
+  const file = path.join(tmp(), 'settings.json');
+  const script = path.join(ROOT, 'hooks', 'claude-status-hook.js');
+  // 真机形态：曾把 Electron Helper 当 node 写进去（那条 hook 永远跑不起来）
+  const bad = `'/App/Electron Helper.app/Contents/MacOS/Electron' '${script}'`;
+  fs.writeFileSync(file, JSON.stringify({
+    hooks: {
+      Stop: [
+        { hooks: [{ type: 'command', command: 'echo user-own' }] },
+        { 'pet-agent-status': true, hooks: [{ type: 'command', command: bad }] },
+      ],
+    },
+  }, null, 2));
+
+  installer.install({ settingsFile: file });
+  const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const dump = JSON.stringify(after);
+  assert.ok(!dump.includes('Electron Helper'), '过时条目必须被清掉，否则每次重装都堆一条死 hook');
+  assert.ok(dump.includes('echo user-own'), '用户自有命令不得被波及');
+  const stopCmds = after.hooks.Stop.flatMap((e) => (e.hooks || []).map((h) => h.command));
+  const ours = stopCmds.filter((c) => c.includes(script));
+  assert.strictEqual(ours.length, 1, `本插件应只留一条 command，实际 ${ours.length} 条`);
+});
+
+test('卸载时过时条目也一并摘除（不留死 hook）', () => {
+  const file = path.join(tmp(), 'settings.json');
+  const script = path.join(ROOT, 'hooks', 'claude-status-hook.js');
+  const bad = `'/old/node' '${script}'`;
+  fs.writeFileSync(file, JSON.stringify({
+    hooks: { Stop: [{ 'pet-agent-status': true, hooks: [{ type: 'command', command: bad }] }] },
+  }, null, 2));
+  installer.uninstall({ settingsFile: file });
+  const dump = JSON.stringify(JSON.parse(fs.readFileSync(file, 'utf8')));
+  assert.ok(!dump.includes(script), '卸载后不该残留任何指向本插件脚本的命令');
+});
