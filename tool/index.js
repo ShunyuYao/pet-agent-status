@@ -17,6 +17,7 @@ const { createCodexIpc } = require(path.join(LIB, 'codex-ipc.js'));
 const { createCodexAppIngest } = require(path.join(LIB, 'codex-app-ingest.js'));
 const { createRolloutActivity } = require(path.join(LIB, 'codex-rollout-activity.js'));
 const { createCodexThreadTitles } = require(path.join(LIB, 'codex-thread-titles.js'));
+const cds = require(path.join(LIB, 'claude-desktop-sessions.js'));
 const { createTerminalTitles } = require(path.join(LIB, 'terminal-titles.js'));
 const { createNodeI18n } = require(path.join(LIB, 'i18n.js'));
 const installer = require(path.join(LIB, 'claude-hooks-installer.js'));
@@ -105,6 +106,10 @@ function createCollector(deps) {
   // 按 tty 从 iTerm2/Terminal.app 查回来（fixtures/terminal-titles-facts.md）。
   // 可注入：测试绝不 spawn 真 osascript（会触发自动化授权弹窗/拉起终端查询）。
   const termTitles = d.terminalTitles || createTerminalTitles({ now });
+  // Claude Desktop App 会话适配（fixtures/claude-desktop-facts.md）：App 会话 hooks 照常触发
+  // 但 tty:null；元数据（AI 标题 + cliSessionId 归属）在 App 自己的 Application Support 目录。
+  // 可注入：测试绝不读维护者机器上的真实 App 目录（隔离红线，同 threadTitles）。
+  const claudeDesktop = d.claudeDesktop || cds.createClaudeDesktopSessions({ now });
   let codexIpc = null;
   let ipcEnabled = null;   // 上次读到的开关值（null = 还没读过）
   // 缺省 undefined → installer 自己走 settingsPath()（即 PET_AS_CLAUDE_SETTINGS 覆盖）；
@@ -234,10 +239,17 @@ function createCollector(deps) {
     const row = lastSnapshot.rows.find((r) => r.sessionId === sessionId);
     // 两条并列的导航路（判定唯一实现在 lib/codex-deeplink.js#pickNavigator）：
     // Codex App 任务没有 tty、只有 threadId，只能走深链接；其余（含所有 CLI 会话）走 tty 聚焦。
-    const nav = deeplink.pickNavigator(row);
+    // 三条并列的导航路（判定各自唯一实现）：Codex App 深链接 / Claude App 激活兜底 /
+    // tty 聚焦（含所有 CLI 会话）。Claude App 会话没有可寻址的深链接（facts §4），
+    // 兜底只把 App 提到前台，不假装能定位到具体会话。
+    const nav = deeplink.pickNavigator(row)
+      || cds.pickAppNavigator(row, (id) => claudeDesktop.has(id));
     let result;
     if (!nav) {
       result = { ok: false, reason: 'unavailable' };
+    } else if (nav.kind === 'claude-app') {
+      const r = cds.activateClaudeApp(d.execFile);
+      result = r.ok ? { ok: true } : { ok: false, reason: 'no-claude-app' };
     } else if (nav.kind === 'deeplink') {
       const r = deeplink.openDeepLink(nav.url, d.execFile);
       // `open` 受理 ≠ 页面真的呈现（fixtures/codex-ipc-facts.md §6）——这里只能报「已发起」。
@@ -267,7 +279,9 @@ function createCollector(deps) {
         ? t('jump.unavailable')
         : result.reason === 'no-codex-app'
           ? t('jump.noCodexApp')
-          : t('jump.failed', { reason: result.reason });
+          : result.reason === 'no-claude-app'
+            ? t('jump.noClaudeApp')
+            : t('jump.failed', { reason: result.reason });
       jumpErrors.set(sessionId, { text, at });
     }
     // 立刻回推一轮，用户点完当场看到结果，不用等下一个 tick
@@ -298,9 +312,11 @@ function createCollector(deps) {
       const result = aggregate(raw, {
         now: at, isPidAlive: alive, t,
         canJump: makeCanJump(at),          // 判定实现在 lib/terminal-jump.js，这里只注入
-        // 无 tty 行（App 任务）的可点判定：唯一实现在 codex-deeplink#pickNavigator，
-        // aggregate 保持零厂牌特判，只吃注入
-        canJumpWithoutTty: (row) => deeplink.pickNavigator(row) != null,
+        // 无 tty 行的可点判定：两条并列的路各自唯一实现——Codex App 深链接
+        // （codex-deeplink#pickNavigator）与 Claude App 激活兜底
+        // （claude-desktop-sessions#pickAppNavigator）。aggregate 保持零厂牌特判，只吃注入。
+        canJumpWithoutTty: (row) => deeplink.pickNavigator(row) != null
+          || cds.pickAppNavigator(row, (id) => claudeDesktop.has(id)) != null,
         jumpErrors: activeJumpErrors(at),  // 上次跳转失败的行内错误条
         dismissedAt: dismissMap(),         // 用户点掉的行（已结束态才生效）
         // App 正在跟随的会话在 focus 同级里优先（US-8；threadId 即 conversationId）
@@ -312,6 +328,13 @@ function createCollector(deps) {
           if (rec.agent === 'codex' && rec.threadId) {
             const fromCatalog = threadTitles.lookup(rec.threadId);
             if (fromCatalog) return fromCatalog;
+          }
+          // Claude App 会话：AI 标题在 App 元数据里落盘（facts §2）。App 会话没有终端
+          // 标签可查，这一档正好补上「无 tty 只能落盘兜底」的缺口；CLI 会话查不到
+          // （cliSessionId 只属于 App 会话），自然落到下一档终端标签。
+          if (rec.agent === 'claude-code') {
+            const fromApp = claudeDesktop.lookupTitle(rec.sessionId);
+            if (fromApp) return fromApp;
           }
           return rec.tty ? termTitles.lookup(rec.tty) : null;
         }

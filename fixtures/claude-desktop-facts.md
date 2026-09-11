@@ -55,7 +55,7 @@ Claude Code 是 Claude.app（Claude for Desktop）内的能力。App 内嵌一�
 - **没有** `claude://code/session/<id>` 之类打开既有会话的方案（文档 + Info.plist 均无）。
 - `~/Applications/Claude Code URL Handler.app` 注册的是另一个 scheme `claude-cli://`（CLI 深链，LSBackgroundOnly）。
 
-## 5. 对插件接入的建议（未实现，仅结论）
+## 5. 对插件接入的建议（已实现，见 lib/claude-desktop-sessions.js）
 
 1. **状态**：什么都不用做，hooks 已覆盖——App 会话本来就会出现在面板上（tty:null）。
 2. **标题**：App 会话可升级为读 `claude-code-sessions/**.json` 按 `cliSessionId` 反查 AI `title`
@@ -64,3 +64,38 @@ Claude Code 是 Claude.app（Claude for Desktop）内的能力。App 内嵌一�
 4. **区分 App/CLI**：hook 载荷无显式来源字段；可用 `tty==null && ppid 链上有 Claude.app` 或
    cwd 命中 `.claude/worktrees/` + `claude-code-sessions` 里存在对应 `cliSessionId` 判定，
    类比 codex 的 `form:'cli'|'app'` 加一档。
+
+## 6. 空会话（2026-09-12 实录，已修）
+
+深链接开一个 App 会话窗口，poll 状态文件每 0.5s 抓到的完整序列：
+
+```
+t+3s  c162d0f4 running SessionStart  title=None since=1789142416000
+t+3s  c162d0f4 ended   SessionEnd    title=None since=None     ← 同一秒内就结束
+（此后 20s 无变化）
+```
+
+即 **App 每开一个窗口就甩出一个不到 1 秒的空会话**：只有 SessionStart→SessionEnd，
+没有 UserPromptSubmit、没有工具调用、不写任何 App 元数据文件。当天早些时候另一次探针
+还同时抓到两条 `cwd:/Users/shunyu` 的同类秒退会话（疑似 App 的预热/探测调用）。
+
+旧实现照常落一条 `ended`，于是：面板绿色「已完成」行 × 1、汇总胶囊与徽标 done +1、
+宠物为它喊一声「刚办完」——**误报完成**（PROTOCOL.md 红线）。与 Codex App
+「已读帧把刚开跑的任务翻成 ended」（0.8.3 修）是同一类缺陷：状态必须有证据支撑。
+
+已修：hook 在 SessionEnd 时若发现前一条记录仍停在 SessionStart，删除状态文件而不是写
+ended（判据见 `lib/claude-events.js#isEmptySessionEnd`，方向性保守：证明不了就照旧写）。
+
+## 7. cliSessionId 何时才有（影响标题/跳转的可用窗口）
+
+asar 静态证据（Claude.app 1.20186.1）：会话序列化函数带 `cliSessionId` 字段，且有
+`isFirstTurn: !e.cliSessionId` ——**cliSessionId 是首个回合完成后才落上去的**
+（`--resume <cliSessionId>` 也印证：它是「可续接的那个 CLI 会话」的 id）。
+
+推论（已在实现里按这个前提写）：**新建 App 会话的第一个回合期间，元数据里查不到
+cliSessionId**，因此那一段时间内标题反查与「激活 App」跳转入口都不出现，从第二个回合
+起才生效。这是诚实降级（证明不了归属就不给入口），不是缺陷；不要为了让入口早点出现
+而改用 cwd 之类的模糊线索去猜归属——配错比没有更糟。
+
+本机另有一份 2026-05 的元数据完全没有 `cliSessionId`（带 `transcriptUnavailable:true`），
+同样映射不出来，按查不到处理。

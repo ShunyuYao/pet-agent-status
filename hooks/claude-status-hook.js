@@ -17,8 +17,8 @@ function quit() {
 }
 
 function handle(raw) {
-  const { stateForEvent } = require(path.join(LIB, 'claude-events.js'));
-  const { writeStatus } = require(path.join(LIB, 'state-files.js'));
+  const { stateForEvent, isEmptySessionEnd } = require(path.join(LIB, 'claude-events.js'));
+  const { writeStatus, readStatus, removeStatus } = require(path.join(LIB, 'state-files.js'));
   const { resolveTty, resolveAgentPid } = require(path.join(LIB, 'tty-detect.js'));
 
   const event = JSON.parse(raw);
@@ -29,6 +29,13 @@ function handle(raw) {
 
   // session_id / cwd 是协议必填项的来源，缺了写出来也是坏记录，不如不写
   if (!event.session_id || !event.cwd) return;
+
+  // 空会话收尾：一步都没往前走过的会话结束时清掉它，别留一条绿色「已完成」
+  // （判据与理由在 lib/claude-events.js#isEmptySessionEnd）。
+  if (isEmptySessionEnd(event.hook_event_name, readStatus(event.session_id))) {
+    removeStatus(event.session_id);
+    return;
+  }
 
   const input = {
     agent: 'claude-code',

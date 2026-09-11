@@ -133,6 +133,7 @@ function collectorOn(dir, over) {
     // 且本套件的 App 行用的是实录 conversationId——在维护者机器上真能查到标题
     threadTitles: { lookup: () => null },
     terminalTitles: { lookup: () => null },   // 同理：默认实现 spawn osascript 查真实终端
+    claudeDesktop: { lookupTitle: () => null, has: () => false },   // 同理：默认实现读真实 App 目录
     rolloutActivity: { activeThreads: () => new Map() }   // 同理：默认实现 stat 真实 ~/.codex/sessions
   }, over));
 }
@@ -634,6 +635,55 @@ function leakedBackups() {
     assert.strictEqual(by.cc.title, '终端里的 AI 标题', 'claude 行应显示终端标签标题');
     assert.strictEqual(by.cc2.title, '无终端兜底', '无 tty 行回落落盘标题');
     assert.ok(!asked.some((id) => id == null), '无 threadId 的行不该问线程库解析器');
+    await c.stop(m.pet);
+  });
+
+  // ---- Claude Desktop App 会话（fixtures/claude-desktop-facts.md §5）----
+  // App 会话 hooks 照常触发但 tty:null；标题在 App 元数据里、跳转只能激活 App 兜底。
+  // 单测（claude-desktop-sessions-test）只证明适配器自身；这里证明 tool 真把它接上了。
+
+  await test('Claude App 会话：元数据标题压过落盘兜底，tty:null 行有激活入口且点击 open -b', async () => {
+    const dir = tmp();
+    const m = mockPet();
+    const APP = 'app-sess';
+    const CLI = 'cli-nootty';
+    const calls = [];
+    const c = collectorOn(dir, {
+      claudeDesktop: {
+        lookupTitle: (id) => (id === APP ? 'App 里的 AI 标题' : null),
+        has: (id) => id === APP
+      },
+      execFile: (cmd, args) => calls.push([cmd, ...args])
+    });
+    sf.writeStatus(rec({ sessionId: APP, tty: null, pid: null, title: '首条 prompt 兜底', ts: T0 }), dir);
+    sf.writeStatus(rec({ sessionId: CLI, tty: null, pid: null, title: 'CLI 无终端', ts: T0 }), dir);
+    await c.start(m.pet);
+    const by = Object.fromEntries(m.state.snapshots()[0].data.rows.map((r) => [r.sessionId, r]));
+    assert.strictEqual(by[APP].title, 'App 里的 AI 标题', 'App 元数据的 AI 标题必须压过落盘兜底');
+    assert.strictEqual(by[CLI].title, 'CLI 无终端', '归属不成立的行照旧走落盘兜底');
+    assert.strictEqual(by[APP].canJump, true, 'App 会话 tty:null 也要有跳转入口（激活兜底）');
+    assert.strictEqual(by[CLI].canJump, false, '证明不了 App 归属的无 tty 行不给假入口');
+    const r = c.handleJump(m.pet, { sessionId: APP });
+    assert.strictEqual(r.ok, true);
+    assert.deepStrictEqual(calls, [['open', '-b', 'com.anthropic.claudefordesktop']],
+      '必须按 bundle id 激活 Claude App');
+    await c.stop(m.pet);
+  });
+
+  await test('Claude App 激活失败：行内错误条显 jump.noClaudeApp，不静默不 throw', async () => {
+    const dir = tmp();
+    const m = mockPet();
+    const APP = 'app-sess-fail';
+    const c = collectorOn(dir, {
+      claudeDesktop: { lookupTitle: () => null, has: (id) => id === APP },
+      execFile: () => { throw new Error('kLSApplicationNotFoundErr'); }
+    });
+    sf.writeStatus(rec({ sessionId: APP, tty: null, pid: null, ts: T0 }), dir);
+    await c.start(m.pet);
+    const r = c.handleJump(m.pet, { sessionId: APP });
+    assert.strictEqual(r.ok, false);
+    const row = m.state.snapshots().pop().data.rows.find((x) => x.sessionId === APP);
+    assert.strictEqual(row.jumpError, t('jump.noClaudeApp'), '失败要有专属文案，不甩内部枚举名');
     await c.stop(m.pet);
   });
 

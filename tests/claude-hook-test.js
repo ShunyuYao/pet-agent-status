@@ -371,6 +371,56 @@ test('compact 恢复（SessionStart source=compact）把陈旧 waiting 清回 ru
   assert.strictEqual(rec.lastEvent, 'SessionStart');
 });
 
+// ---- 真机缺陷回归（2026-09-12）：Claude Desktop App 的空会话不许报「已完成」----
+//
+// 实录（fixtures/claude-desktop-facts.md §6，本机 poll 抓到）：每开一个 App 会话窗口，
+// App 都会甩出一个**不到 1 秒的空会话**——只有 SessionStart→SessionEnd，没有任何提问、
+// 没有工具调用。旧实现照常落一条 ended，面板把它显示成绿色「已完成」、计进汇总胶囊与
+// 徽标，宠物还会为它喊一声「刚办完」。这是**误报完成**（PROTOCOL.md 红线），
+// 与 Codex App「已读帧把刚开跑的任务翻成 ended」同一类：状态必须有证据支撑。
+//
+// 判据（方向性保守，同 Notification 那条）：只有**能证明它什么都没干**才清除——
+// 已有记录且 lastEvent 仍停在 SessionStart。拿不到前一条记录（hook 中途才装、
+// 目录被清过）时不做推断，照旧写 ended。
+
+test('SessionStart→SessionEnd 的空会话：不留「已完成」行，状态文件被清除', () => {
+  const dir = tmp();
+  const start = fixtureOf('session-start.json');
+  runFixture('session-start.json', dir);
+  assert.strictEqual(readOnly(dir).state, 'running', '前置：SessionStart 该先落 running');
+  const end = Object.assign({}, fixtureOf('session-end.json'), {
+    session_id: start.session_id, cwd: start.cwd
+  });
+  const res = runHook(end, dir);
+  assert.strictEqual(res.status, 0, 'hook 铁律：任何情况都退 0');
+  assert.deepStrictEqual(fs.readdirSync(dir).filter((n) => n.endsWith('.json')), [],
+    '空会话该被清除，绝不留一条绿色「已完成」（误报完成）');
+});
+
+test('干过活的会话正常收尾：SessionEnd 照常落 ended（清除只针对空会话）', () => {
+  const dir = tmp();
+  const start = fixtureOf('session-start.json');
+  runFixture('session-start.json', dir);
+  const prompt = Object.assign({}, fixtureOf('user-prompt-submit.json'), {
+    session_id: start.session_id, cwd: start.cwd
+  });
+  runHook(prompt, dir);
+  const end = Object.assign({}, fixtureOf('session-end.json'), {
+    session_id: start.session_id, cwd: start.cwd
+  });
+  runHook(end, dir);
+  const rec = readOnly(dir);
+  assert.strictEqual(rec.state, 'ended', '提过问的会话结束时必须留 ended 行');
+  assert.strictEqual(rec.lastEvent, 'SessionEnd');
+});
+
+test('拿不到前一条记录时不做推断：孤立的 SessionEnd 照旧落 ended', () => {
+  const dir = tmp();
+  runFixture('session-end.json', dir);
+  assert.strictEqual(readOnly(dir).state, 'ended',
+    'hook 中途才装 / 目录被清过时，没有证据说明它是空会话——保守写 ended');
+});
+
 // ---- 7. 隔离自证：全程没碰真实状态目录 ----
 test('测试期间未写入真实 ~/.local/state/pet-agent-status', () => {
   assert.deepStrictEqual(leakedTestFiles(), [], '测试数据泄漏进了真实状态目录');

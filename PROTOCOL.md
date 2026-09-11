@@ -41,7 +41,15 @@
 | `Notification` **且是权限请求** | `waiting` |
 | `Notification` **且是闲置提醒**（`matcher:'idle_prompt'`，或 message 含「waiting for your input」） | `running` |
 | `Stop` | `done` |
-| `SessionEnd` | `ended` |
+| `SessionEnd` | `ended`（**空会话例外**：前一条记录仍停在 `SessionStart` 时删除状态文件，见下） |
+
+**空会话结束时删除状态文件，不许留「已完成」**（2026-09-12 真机缺陷，实录见
+`fixtures/claude-desktop-facts.md` §6）：Claude Desktop App 每开一个会话窗口都会甩出一个
+不到 1 秒的空会话——只有 `SessionStart`→`SessionEnd`，没有提问也没有工具调用。
+照常写 `ended` 会让面板显示绿色「已完成」、计进汇总胶囊与徽标、宠物还为它喊一声，
+而它什么都没干——这是**误报完成**。判据方向性保守：只有能证明「一步都没往前走」
+（已有 `source:'hook'` 记录且 `lastEvent === 'SessionStart'`）才删；拿不到前一条记录
+（hook 中途才装、目录被清过）时不做推断，照旧写 `ended`。
 
 **`Notification` 必须按语义分流，不许一律当 `waiting`**（2026-09-11 真机缺陷，
 实录根因见 `fixtures/waiting-accuracy-facts.md`）：它是通用通知事件，官方 matcher 至少有
