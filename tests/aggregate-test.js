@@ -749,6 +749,43 @@ test('已结束的行被点掉后从面板收起（done/idle/unknown 三态）',
   }
 });
 
+// 2026-09-11 用户需求二：「可能已中断」（error 态：进程已死）点一下也让它消失。
+// error 与 done/idle/unknown 同属「已经没有后续」的态——进程都不在了，留着只能当讣告。
+test('可能已中断（error）的行被点掉后收起，且有新动静自动复现', () => {
+  const dir = tmp();
+  // running 落盘 + 90s 无心跳 + 进程已死 → 展示态 error
+  const snap = seed(dir, [rec({ sessionId: 'x', state: 'running', ts: T0 - 90 * 1000 })]);
+  const before = run(snap, { isPidAlive: () => false }).rows;
+  assert.strictEqual(before.length, 1);
+  assert.strictEqual(before[0].state, 'error', '前置：应推导出 error 态');
+  assert.ok(agg.DISMISSIBLE.has('error'), 'error 应属可收起态');
+  const after = agg.aggregate(sf.readSnapshots(dir),
+    { now: T0, isPidAlive: () => false, t, dismissedAt: { x: T0 } }).rows;
+  assert.strictEqual(after.length, 0, 'error 点掉后应收起');
+  // 同一会话重新有事件（比如用户在那个 tty 重新起了 agent）→ 行复现
+  sf.writeStatus(rec({ sessionId: 'x', state: 'running', ts: T0 + 5000 }), dir);
+  const revived = agg.aggregate(sf.readSnapshots(dir),
+    { now: T0 + 6000, isPidAlive: () => true, t, dismissedAt: { x: T0 } }).rows;
+  assert.strictEqual(revived.length, 1, '新动静后应复现（已读不是删除）');
+});
+
+// 面板的可点态需要行自带标志：canJump 之外增加 canDismiss（展示态属 DISMISSIBLE 即真），
+// panel 不 require 本模块，只能靠快照行携带（同 canJump 精神）。
+test('行带 canDismiss 标志：可收起态为 true，running/waiting 为 false', () => {
+  const dir = tmp();
+  const snap = seed(dir, [
+    rec({ sessionId: 'r', state: 'running', ts: T0 - 5000 }),
+    rec({ sessionId: 'e', state: 'running', ts: T0 - 90 * 1000, pid: 999999 }),
+    rec({ sessionId: 'd', state: 'done', lastEvent: 'Stop', ts: T0 - 60 * 1000 })
+  ]);
+  const rows = run(snap, { isPidAlive: (pid) => pid !== 999999 }).rows;
+  const byId = Object.fromEntries(rows.map((r) => [r.sessionId, r]));
+  assert.strictEqual(byId.r.canDismiss, false, 'running 不可收起');
+  assert.strictEqual(byId.e.state, 'error');
+  assert.strictEqual(byId.e.canDismiss, true, 'error 可收起');
+  assert.strictEqual(byId.d.canDismiss, true, 'done 可收起');
+});
+
 test('运行中/等待批准被点击不收起（还在进行中，收起会丢失视野）', () => {
   for (const state of ['running', 'waiting']) {
     const dir = tmp();

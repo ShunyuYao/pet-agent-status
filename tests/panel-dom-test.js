@@ -519,6 +519,36 @@ test('点会话行 → 发 agent-status:jump{sessionId}', () => {
   p.close();
 });
 
+// 2026-09-11 用户需求二：「可能已中断」点一下让它消失。error 行常连终端归属都判不出
+// （canJump=false），原来根本不绑点击——可收起的行（canDismiss）也要是可点态，
+// 点击同样发 jump 意图，收不收由 tool 按状态裁决（panel 不自己判语义）。
+test('canDismiss 行即使不能跳转也可点：点击发 jump 意图', () => {
+  const snap = snapshotOf([
+    rec({ sessionId: 'err', state: 'running', ts: T0 - 90 * 1000, pid: 999999 }),
+    rec({ sessionId: 'run', state: 'running', ts: T0 - 5000 })
+  ], { isPidAlive: (pid) => pid !== 999999, canJump: () => false });
+  const byId = Object.fromEntries(snap.rows.map((r) => [r.sessionId, r]));
+  assert.strictEqual(byId.err.state, 'error', '前置：应有 error 行');
+  assert.strictEqual(byId.err.canJump, false, '前置：终端归属判不出');
+  assert.strictEqual(byId.err.canDismiss, true, '前置：行带 canDismiss 标志');
+
+  const p = mountPanel();
+  p.push('agent-status:snapshot', snap);
+  const errEl = p.$('.row[data-session-id="err"]');
+  assert.ok(errEl.classList.contains('can-dismiss'), 'error 行应有可点态 class（手型）');
+  errEl.dispatchEvent(new p.dom.window.MouseEvent('click', { bubbles: true }));
+  assert.strictEqual(p.emitted.length, 1, '点击应发出意图');
+  assert.strictEqual(p.emitted[0].name, 'agent-status:jump');
+  assert.strictEqual(p.emitted[0].data.sessionId, 'err');
+  // 对照：running 且不能跳的行仍不可点（不给点了没反应的假入口）
+  const runEl = p.$('.row[data-session-id="run"]');
+  assert.ok(!runEl.classList.contains('can-jump') && !runEl.classList.contains('can-dismiss'),
+    'running 不可跳的行不该有可点态');
+  runEl.dispatchEvent(new p.dom.window.MouseEvent('click', { bubbles: true }));
+  assert.strictEqual(p.emitted.length, 1, '点它不该发意图');
+  p.close();
+});
+
 test('快照带 jumpError → 该行下方渲染 Danger 色行内错误条', () => {
   const snap = snapshotOf([
     rec({ sessionId: 'ok', project: 'alpha', ts: T0 }),

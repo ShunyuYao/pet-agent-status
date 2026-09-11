@@ -239,11 +239,18 @@ function createCollector(deps) {
     } else {
       result = terminalJump.runJump(row.tty, { psTree: psTreeCached(at), runner: jumpRunner });
     }
-    if (result.ok) {
+    // 点完就收起：只对已经没有后续的行生效（running/waiting 还在进行中，收起会丢失视野）。
+    // 记时刻而非布尔，让「又有新动静」能自动复现这一行。
+    // 两条收起路径：① 跳转成功（看过了）；② 压根找不到可去之处（unavailable——error 行
+    // 常见形态：终端窗口也早关了）。「跳转失败不收起」原则保护的是「用户还找得到的会话」，
+    // unavailable 没有可找的对象，点击的目的就是清掉这行（2026-09-11 用户需求二）。
+    // 执行类失败（osascript 挂了/没装 Codex App）不在其列：那是这次没跳成，留着可重试。
+    const dismiss = row && DISMISSIBLE.has(row.state)
+      && (result.ok || result.reason === 'unavailable');
+    if (dismiss) dismissedAt.set(sessionId, at);
+    if (result.ok || dismiss) {
+      // 收起的行连同它的错误条一起走：错误条挂在行下方，行都没了留它无处安放
       jumpErrors.delete(sessionId);
-      // 点完就收起：只对已经没有后续的行生效（running/waiting 还在进行中，收起会丢失视野）。
-      // 记时刻而非布尔，让「又有新动静」能自动复现这一行。
-      if (row && DISMISSIBLE.has(row.state)) dismissedAt.set(sessionId, at);
     } else {
       // reason==='unavailable' 是「压根找不到终端」，与「osascript 报错」文案不同：
       // 前者用户该去别处找会话，后者是这次执行挂了，可以再试。

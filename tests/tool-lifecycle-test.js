@@ -648,4 +648,55 @@ function leakedBackups() {
     assert.strictEqual(after.length, 1, '跳转失败必须留着这一行');
     assert.ok(after[0].jumpError, '并且要显示行内错误');
   });
+
+  // ---- 「可能已中断」点一下让它消失（2026-09-11 用户需求二）----
+  // error 行常见形态是终端窗口也早关了：跳转判定 unavailable。「跳转失败不收起」原则
+  // 保护的是「用户还找得到的会话」；unavailable 意味着压根没有可去之处，点击的目的
+  // 就是清掉这行——此时收起，且不留一条挂在已消失行下的错误条。
+  await test('可能已中断 + 找不到终端：点击即收起、不留错误条', async () => {
+    const dir = tmp();
+    const T = Date.now();
+    // running 落盘 + 90s 无心跳 + 进程已死 → error；psTree 里没有这个 tty → unavailable
+    sf.writeStatus(rec({ sessionId: 'ed', state: 'running', ts: T - 90 * 1000, tty: '/dev/ttys9' }), dir);
+    const m = mockPet();
+    const c = collectorOn(dir, { now: () => T, isPidAlive: () => false, psTree: () => [] });
+    c.tick(m.pet);
+    const before = m.state.snapshots().pop().data.rows;
+    assert.strictEqual(before.length, 1);
+    assert.strictEqual(before[0].state, 'error', '前置：应是 error 态');
+
+    const res = c.handleJump(m.pet, { sessionId: 'ed' });
+    assert.strictEqual(res.ok, false, '跳转本身仍如实报告失败');
+    const after = m.state.snapshots().pop().data.rows;
+    assert.strictEqual(after.length, 0, 'error + unavailable 点击后应收起');
+  });
+
+  await test('可能已中断但终端还在：跳转成功照样收起（error 已属可收起态）', async () => {
+    const dir = tmp();
+    const T = Date.now();
+    sf.writeStatus(rec({ sessionId: 'ej', state: 'running', ts: T - 90 * 1000, tty: '/dev/ttys9' }), dir);
+    const m = mockPet();
+    const c = collectorOn(dir, {
+      now: () => T, isPidAlive: () => false,
+      jumpRunner: () => ({ ok: true }),
+      psTree: () => [{ pid: 1, ppid: 0, comm: '/A/iTerm.app/Contents/MacOS/iTerm2', tty: 'ttys9' }],
+    });
+    c.tick(m.pet);
+    assert.strictEqual(m.state.snapshots().pop().data.rows[0].state, 'error');
+    const res = c.handleJump(m.pet, { sessionId: 'ej' });
+    assert.strictEqual(res.ok, true);
+    assert.strictEqual(m.state.snapshots().pop().data.rows.length, 0, '跳转成功后收起');
+  });
+
+  await test('运行中 + 找不到终端：不收起（unavailable 收起只对可收起态生效）', async () => {
+    const dir = tmp();
+    const T = Date.now();
+    sf.writeStatus(rec({ sessionId: 'ru', state: 'running', ts: T - 5000, tty: '/dev/ttys9' }), dir);
+    const m = mockPet();
+    const c = collectorOn(dir, { now: () => T, psTree: () => [] });
+    c.tick(m.pet);
+    c.handleJump(m.pet, { sessionId: 'ru' });
+    const after = m.state.snapshots().pop().data.rows;
+    assert.strictEqual(after.length, 1, 'running 行无论跳转结果如何都不许收起');
+  });
 })();

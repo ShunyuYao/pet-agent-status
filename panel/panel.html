@@ -83,6 +83,7 @@ body{
 }
 /* 手型只给真能跳的行：推断不出终端的行不是可点态（US-005 无假入口） */
 .row.can-jump{cursor:pointer}
+.row.can-dismiss{cursor:pointer}   /* 可收起的行即使跳不了也可点（点完收起） */
 .row.is-waiting{background:var(--waiting-bg);border-color:var(--warning)}
 /* 聚焦会话（本体/徽标正关注的那一个）：左缘细白条，弱于 waiting 橙描边，可叠加 */
 .row.is-focus{box-shadow:inset 3px 0 0 rgba(255,255,255,.45)}
@@ -624,11 +625,14 @@ body{
     side.appendChild(time);
     el.appendChild(side);
 
-    // 可点态只认快照带来的 canJump —— 终端归属判定唯一在 lib/terminal-jump.js，
+    // 可点态只认快照带来的 canJump / canDismiss —— 终端归属与可收起判定都在 lib 侧，
     // panel 这边再判一次就会两处打架（点得动却跳不了）。
-    // 推断不出终端的行不挂 handler、不显手型：不给点了没反应的假入口（DESIGN.md 同禁假入口）。
-    if (row.canJump) {
-      el.classList.add('can-jump');
+    // 两样都没有的行不挂 handler、不显手型：不给点了没反应的假入口（DESIGN.md 同禁假入口）。
+    // canDismiss（已结束/已中断等无后续态）即使跳不了也可点：点击发同一条 jump 意图，
+    // 收不收由 tool 按状态裁决（可能已中断点一下即收起，2026-09-11 用户需求）。
+    if (row.canJump || row.canDismiss) {
+      if (row.canJump) el.classList.add('can-jump');
+      if (row.canDismiss) el.classList.add('can-dismiss');
       el.addEventListener('click', function () { emit(EV_JUMP, { sessionId: row.sessionId }); });
     }
     return el;
