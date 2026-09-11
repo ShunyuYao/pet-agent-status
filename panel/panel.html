@@ -42,6 +42,8 @@ body{
   font-size:13px;
   overflow:hidden;
   user-select:none;
+  /* 窗口高度定死 420（manifest），行数超过后由列表/设置区自己滚，头部常驻 */
+  display:flex;flex-direction:column;
 }
 /* ---- 头部：标题 + 汇总胶囊 + 关闭 ---- */
 .topbar{display:flex;align-items:center;gap:8px;margin-bottom:12px;-webkit-app-region:drag}
@@ -64,8 +66,17 @@ body{
   color:var(--gray);font-size:16px;line-height:1;padding:2px 4px;
 }
 /* ---- 会话列表 ---- */
-.list{display:flex;flex-direction:column;gap:8px}
+.list{
+  display:flex;flex-direction:column;gap:8px;
+  flex:1 1 auto;min-height:0;overflow-y:auto;
+  /* 滚到底的行不贴死圆角窗缘；负 margin 让滚动条不挤占行宽 */
+  padding:0 6px 6px 0;margin-right:-6px;
+}
+.list::-webkit-scrollbar{width:4px}
+.list::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:2px}
+.list::-webkit-scrollbar-track{background:transparent}
 .row{
+  flex:0 0 auto; /* 滚动容器内不许行被压扁 */
   display:flex;align-items:center;gap:10px;
   padding:9px 10px;border-radius:12px;
   background:var(--row-bg);border:1.5px solid transparent;
@@ -151,7 +162,10 @@ body{
 .gear:hover{color:#fff}
 /* gear 抢了 margin-left:auto，close 不再需要 */
 .topbar .close{margin-left:0}
-.settings{display:flex;flex-direction:column;gap:8px}
+.settings{display:flex;flex-direction:column;gap:8px;flex:1 1 auto;min-height:0;overflow-y:auto}
+.settings::-webkit-scrollbar{width:4px}
+.settings::-webkit-scrollbar-thumb{background:rgba(255,255,255,.18);border-radius:2px}
+.set-group{flex:0 0 auto}
 .set-group{background:var(--row-bg);border-radius:12px;padding:10px}
 .set-head{display:flex;align-items:center;gap:10px}
 .set-actions{display:flex;align-items:center;gap:10px;margin-top:8px}
