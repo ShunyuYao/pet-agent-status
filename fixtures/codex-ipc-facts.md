@@ -91,3 +91,25 @@
 - 会话的工作目录/标题（`ide-context` 是发给别的 client 的 discovery 请求，与会话无可靠关联）→ App 任务 `project` 用品牌名兜底。
 - waiting（等批准）态：被动通道无对应信号，App 任务不会出现 waiting 行。
 - 精确的任务失败信号：无；停留 running 超时由采集器转 unknown 兜底。
+
+## 9. 2026-09-11 第三轮实测：会话标题在本地哪里（US-9 的依据）
+
+- **App 与 CLI 共用 ~/.codex 线程库**：§8 实录 App 任务的 conversationId
+  `01a08a1d-4f63-7e30-af03-48ae77b414b5`，在下面两处都查到同一条 AI 生成标题
+  「查找 Codex 宠物多会话管理」——App 任务不是隔离存储。
+- `~/.codex/sqlite/codex-dev.db` 表 `local_thread_catalog`（`thread_id → display_title`，
+  另有 cwd/source_kind/时间戳）：由 App 的 app-server 维护（扫 rollout 生成），
+  **App 在跑时当天更新**；实测覆盖 source_kind ∈ {cli, vscode}。读取需 node:sqlite
+  （Node 22.5+ 内建；宿主 Electron 43 自带），一律 readOnly 打开。
+- `~/.codex/session_index.jsonl`：每行 `{id, thread_name, updated_at}`。更新节奏不明
+  （实测 mtime 落后当日会话一天+，exec 来源的会话未入索引）——只当次级兜底源。
+- **rollout jsonl / thread_history_1.sqlite 均无标题字段**（session_meta 只有 cwd/originator 等）。
+- IPC 被动帧里无标题（§8.4 维持成立）；ChatGPT.app 自身容器（com.openai.chat）的
+  conversations-v3 是密文缓存、codex-taskItems 目录为空壳，均不可用。
+- 两处皆**内部存储、无公开稳定性承诺**：实现（lib/codex-thread-titles.js）全失败路径
+  静默降级，查不到就回落 hook 兜底标题/品牌名。
+
+**Claude Code 侧对照结论**（同日实测 ~/.claude 全仓）：AI 生成的会话标题**不落盘**
+（resume 列表标题是展示时临时派生；`~/.claude/sessions/<pid>.json` 的 name 是
+`claude-39` 式派生编号，nameSource:'derived'）。本机能拿到的最好等价物 = 首条 prompt
+首行截断，由 hook 经 `title` 字段写入（PROTOCOL.md）。

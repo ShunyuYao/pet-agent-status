@@ -28,7 +28,7 @@ function handle(raw) {
   // session_id / cwd 是协议必填项的来源，缺了写出来也是坏记录，不如不写
   if (!event.session_id || !event.cwd) return;
 
-  writeStatus({
+  const input = {
     agent: 'claude-code',
     sessionId: event.session_id,
     cwd: event.cwd,
@@ -40,7 +40,15 @@ function handle(raw) {
     state,
     lastEvent: event.hook_event_name,
     source: 'hook'
-  });
+  };
+  // 会话标题：Claude Code 不落盘 AI 生成的会话名（2026-09-11 实测 ~/.claude 全仓无此数据，
+  // resume 列表的标题是展示时临时派生的），本机能拿到的最好等价物 = 首条 prompt 的首行。
+  // 只在 UserPromptSubmit 带上；writeStatus 首见定名 + 截断（PROTOCOL.md「title」——
+  // 「不采集会话正文」红线的显式让步：只许首行 + 64 码点，绝不落完整 prompt）。
+  if (event.hook_event_name === 'UserPromptSubmit' && typeof event.prompt === 'string') {
+    input.title = event.prompt;
+  }
+  writeStatus(input);
 }
 
 function main() {

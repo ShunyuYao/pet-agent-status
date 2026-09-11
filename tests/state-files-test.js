@@ -346,5 +346,35 @@ test('form 选填字段：合法值写入、非法值不写、读回校验（PRO
   assert.strictEqual(sf.validateRecord(legacy), null, '没有 form 的旧记录必须继续可读');
 });
 
+test('title 选填字段：首行清洗 + 码点截断 + 首见定名 + 读回校验（US-9，schema:1 加法）', () => {
+  // 清洗：首个非空行、连续空白压成一个空格
+  assert.strictEqual(sf.normalizeTitle('\n\n  修 bug   快点  \n正文'), '修 bug 快点');
+  assert.strictEqual(sf.normalizeTitle('   \n \n'), null, '全空白产不出标题');
+  assert.strictEqual(sf.normalizeTitle(123), null, '非字符串产不出标题');
+  // 截断按码点：64 个 emoji（surrogate pair）+ 省略号，绝不从代理对中间腰斩
+  assert.strictEqual(sf.normalizeTitle('😀'.repeat(100)), `${'😀'.repeat(64)}…`);
+
+  const dir = tmp();
+  const base = {
+    agent: 'claude-code', sessionId: 'title-s1', cwd: '/p/demo', tty: null, pid: null,
+    state: 'running', lastEvent: 'UserPromptSubmit', ts: 1789000000000
+  };
+  const { record } = sf.writeStatus(Object.assign({}, base, { title: '第一条任务\n正文体' }), dir);
+  assert.strictEqual(record.title, '第一条任务');
+  assert.strictEqual(sf.validateRecord(record), null);
+  // 首见定名：带新标题再写不改名，不带标题再写不冲名
+  const w2 = sf.writeStatus(Object.assign({}, base, { title: '第二条任务' }), dir);
+  assert.strictEqual(w2.record.title, '第一条任务', '标题是会话的名字，首见定死');
+  const w3 = sf.writeStatus(Object.assign({}, base, { state: 'done', lastEvent: 'Stop' }), dir);
+  assert.strictEqual(w3.record.title, '第一条任务', '无标题的覆盖写不许冲掉既有标题');
+  assert.strictEqual(JSON.parse(fs.readFileSync(w3.file, 'utf8')).title, '第一条任务', '落盘一致');
+  // 读回校验：非法 title 按损坏处理；没有 title 的旧记录继续可读
+  assert.strictEqual(sf.validateRecord(Object.assign({}, record, { title: 42 })), 'bad-title');
+  assert.strictEqual(sf.validateRecord(Object.assign({}, record, { title: '' })), 'bad-title');
+  const legacy = Object.assign({}, record);
+  delete legacy.title;
+  assert.strictEqual(sf.validateRecord(legacy), null, '没有 title 的旧记录必须继续可读');
+});
+
 for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
 console.log(`\nstate-files-test: ${passed} passed`);

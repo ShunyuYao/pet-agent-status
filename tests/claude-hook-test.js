@@ -114,12 +114,59 @@ test('落盘记录字段齐全且符合 PROTOCOL.md schema:1', () => {
   for (const key of ['schema', 'agent', 'sessionId', 'cwd', 'project', 'tty', 'pid', 'state', 'lastEvent', 'ts']) {
     assert.ok(key in rec, `缺必填字段 ${key}`);
   }
-  // 未在协议里的字段不许乱写（会话正文尤其不许采集）
+  // 未在协议里的字段不许乱写（会话正文除 title 让步边界外不许采集）
   const extra = Object.keys(rec).filter((k) => ![
-    'schema', 'agent', 'sessionId', 'cwd', 'project', 'tty', 'pid', 'state', 'lastEvent', 'ts', 'threadId', 'source'
+    'schema', 'agent', 'sessionId', 'cwd', 'project', 'tty', 'pid', 'state', 'lastEvent', 'ts', 'threadId', 'source', 'title'
   ].includes(k));
   assert.deepStrictEqual(extra, [], `写入了协议外字段: ${extra.join(',')}`);
-  assert.ok(!JSON.stringify(rec).includes('修个 bug'), '绝不采集会话正文（prompt 内容）');
+  // US-9 显式反转了「零 prompt 内容」：标题 = prompt 首行（64 码点截断）是唯一让步，
+  // 完整正文仍不许落盘（多行/超长部分的断言见下面「标题让步边界」组）。
+  assert.strictEqual(typeof rec.title, 'string', 'UserPromptSubmit 应写入标题兜底');
+  assert.ok(rec.title.length > 0 && Array.from(rec.title).length <= 65, '标题必须截断（64 码点 + 省略号）');
+});
+
+// ---- US-9 标题：让步边界与首见定名（用户动作驱动：真实 stdin 喂 hook）----
+
+test('标题 = prompt 首个非空行；第二行起（正文）绝不落盘', () => {
+  const dir = tmp();
+  const base = fixtureOf('user-prompt-submit.json');
+  const secret = 'SECRET-BODY-LINE-不许出现在状态文件里';
+  runHook(Object.assign({}, base, { prompt: `修一下登录页的报错\n${secret}\n第三行` }), dir);
+  const rec = readOnly(dir);
+  assert.strictEqual(rec.title, '修一下登录页的报错');
+  assert.ok(!JSON.stringify(rec).includes(secret), '完整正文（第二行起）不许落盘');
+});
+
+test('超长 prompt 按码点截断成 64+…，剩余部分不落盘', () => {
+  const dir = tmp();
+  const base = fixtureOf('user-prompt-submit.json');
+  const long = '长'.repeat(200);
+  runHook(Object.assign({}, base, { prompt: long }), dir);
+  const rec = readOnly(dir);
+  assert.strictEqual(rec.title, `${'长'.repeat(64)}…`);
+  assert.ok(!JSON.stringify(rec).includes('长'.repeat(65)), '截断之外的正文不许落盘');
+});
+
+test('首见定名：后续 prompt 与 Stop 都不改标题', () => {
+  const dir = tmp();
+  const base = fixtureOf('user-prompt-submit.json');
+  runHook(Object.assign({}, base, { prompt: '第一条任务' }), dir);
+  runHook(Object.assign({}, base, { prompt: '第二条完全不同的任务' }), dir);
+  assert.strictEqual(readOnly(dir).title, '第一条任务', '标题是会话的名字，不随后续 prompt 改');
+  runHook(Object.assign({}, base, { hook_event_name: 'Stop' }), dir);
+  const rec = readOnly(dir);
+  assert.strictEqual(rec.state, 'done');
+  assert.strictEqual(rec.title, '第一条任务', '无 prompt 的事件覆盖写不许冲掉标题');
+});
+
+test('SessionStart（无 prompt）不造标题；空白 prompt 不造空标题', () => {
+  const dir = tmp();
+  runFixture('session-start.json', dir);
+  assert.ok(!('title' in readOnly(dir)), 'SessionStart 没有 prompt，不该有标题');
+  const dir2 = tmp();
+  const base = fixtureOf('user-prompt-submit.json');
+  runHook(Object.assign({}, base, { prompt: '   \n  \n' }), dir2);
+  assert.ok(!('title' in readOnly(dir2)), '全空白 prompt 不许写空标题');
 });
 
 test('pid 写的是 Claude Code 进程（父进程），不是 hook 自己', () => {

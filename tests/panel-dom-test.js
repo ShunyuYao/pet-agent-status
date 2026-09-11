@@ -763,3 +763,34 @@ test('App 任务行渲染：窗口形角标 + 可点（深链接入口）', () =
   assert.strictEqual(jumps[0].data.sessionId, CID);
   p.close();
 });
+
+// ================= US-9 会话标题渲染（快照经真实 aggregate 产出） =================
+
+test('有 title 的行主标签显示标题，目录名转 tooltip；无 title 回落 project', () => {
+  const p = mountPanel();
+  const snap = snapshotOf([
+    rec({ sessionId: 'wt', title: '修一下登录页的报错' }),
+    rec({ sessionId: 'nt', cwd: '/Users/me/projects/demo2' })
+  ]);
+  p.push(tool.SNAPSHOT_EVENT, snap);
+  const labels = {};
+  for (const el of p.$$('.row')) {
+    labels[el.dataset.sessionId] = el.querySelector('.project');
+  }
+  assert.strictEqual(labels.wt.textContent, '修一下登录页的报错', '主标签应是会话标题');
+  assert.strictEqual(labels.wt.title, 'demo', '有标题时目录名转 tooltip');
+  assert.strictEqual(labels.nt.textContent, 'demo2', '无标题回落项目目录名');
+  assert.strictEqual(labels.nt.title, '', '回落态没有多余 tooltip');
+  p.close();
+});
+
+test('titleFor 注入链贯通：解析出的线程标题渲染进行主标签', () => {
+  const p = mountPanel();
+  const snap = snapshotOf(
+    [rec({ sessionId: 'ct', agent: 'codex', threadId: '01a08a1d-4f63-7e30-af03-48ae77b414b5', title: '兜底名' })],
+    { titleFor: () => '查找 Codex 宠物多会话管理' }
+  );
+  p.push(tool.SNAPSHOT_EVENT, snap);
+  assert.strictEqual(p.$('.row .project').textContent, '查找 Codex 宠物多会话管理');
+  p.close();
+});

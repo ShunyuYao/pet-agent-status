@@ -15,6 +15,7 @@ const { createBadgeLink } = require(path.join(LIB, 'badge.js'));
 const deeplink = require(path.join(LIB, 'codex-deeplink.js'));
 const { createCodexIpc } = require(path.join(LIB, 'codex-ipc.js'));
 const { createCodexAppIngest } = require(path.join(LIB, 'codex-app-ingest.js'));
+const { createCodexThreadTitles } = require(path.join(LIB, 'codex-thread-titles.js'));
 const { createNodeI18n } = require(path.join(LIB, 'i18n.js'));
 const installer = require(path.join(LIB, 'claude-hooks-installer.js'));
 const codexInstaller = require(path.join(LIB, 'codex-hooks-installer.js'));
@@ -89,6 +90,9 @@ function createCollector(deps) {
   // 工厂可注入：测试绝不碰真 socket（默认路径是真实 ~/.codex/ipc/ipc.sock）。
   const ipcFactory = typeof d.createCodexIpc === 'function' ? d.createCodexIpc : createCodexIpc;
   const ingest = createCodexAppIngest({ dir: d.dir, now });
+  // 会话标题解析（US-9）：Codex 线程目录里 AI 生成的标题按 threadId 查（App 与 CLI 共库，
+  // fixtures/codex-ipc-facts.md §9）。可注入：测试绝不读真实 ~/.codex（默认走 CODEX_HOME）。
+  const threadTitles = d.threadTitles || createCodexThreadTitles({ codexHome: d.codexHome, now });
   let codexIpc = null;
   let ipcEnabled = null;   // 上次读到的开关值（null = 还没读过）
   // 缺省 undefined → installer 自己走 settingsPath()（即 PET_AS_CLAUDE_SETTINGS 覆盖）；
@@ -245,7 +249,10 @@ function createCollector(deps) {
         canJumpWithoutTty: (row) => deeplink.pickNavigator(row) != null,
         jumpErrors: activeJumpErrors(at),  // 上次跳转失败的行内错误条
         // App 正在跟随的会话在 focus 同级里优先（US-8；threadId 即 conversationId）
-        isFollowing: (row) => !!(codexIpc && row.threadId && codexIpc.isFollowing(row.threadId))
+        isFollowing: (row) => !!(codexIpc && row.threadId && codexIpc.isFollowing(row.threadId)),
+        // 会话标题：Codex 行按 threadId 查线程目录里 AI 生成的名字（唯一实现在
+        // lib/codex-thread-titles.js）；查不到 aggregate 回落落盘兜底标题 → project
+        titleFor: (rec) => (rec.agent === 'codex' && rec.threadId ? threadTitles.lookup(rec.threadId) : null)
       });
       // locale 随快照下发，panel 据此选词表（契约仍是 {rows, summary}，locale 是附加字段）
       result.locale = locale;

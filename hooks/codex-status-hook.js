@@ -45,6 +45,12 @@ function handle(raw) {
   // facts 实测：Codex 的 session_id 本身就是线程号。形态不对就不写（见 codex-events.js）。
   const threadId = threadIdOf(event.session_id);
   if (threadId) input.threadId = threadId;
+  // 会话标题兜底：首条 prompt 首行（writeStatus 首见定名 + 64 码点截断，绝不落完整正文）。
+  // Codex 线程另有 AI 生成的真标题（~/.codex 线程目录），由采集器按 threadId 查到后**优先于**
+  // 这份兜底展示（lib/codex-thread-titles.js）；这里写的是目录里还查不到时的过渡名。
+  if (event.hook_event_name === 'UserPromptSubmit' && typeof event.prompt === 'string') {
+    input.title = event.prompt;
+  }
 
   writeStatus(input);
 }

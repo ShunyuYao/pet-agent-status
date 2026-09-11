@@ -19,6 +19,7 @@
 | `child_process` spawn `osascript` | 点击会话行时聚焦 iTerm2 / Terminal.app 对应窗口标签页 | 仅跳转动作时 |
 | `child_process` spawn `open` | 点击 Codex App 任务时经 `codex://threads/<id>` 深链接跳转 | 仅跳转动作时 |
 | `net` 连接 `~/.codex/ipc/ipc.sock` | Codex App 实时增强（**默认开，面板设置里可关**）：只读监听任务动态与跟随状态 | 开关打开时（默认）；故障自动停用 |
+| `fs`/`node:sqlite` **只读** `~/.codex/sqlite/codex-dev.db`、`~/.codex/session_index.jsonl` | 会话行显示 Codex 自己生成的线程标题 | 只读，30s 缓存；读不到自动降级为目录名 |
 
 另使用宿主 SDK：`storage`（含实验开关持久化）`pet`（bubble/playAnim/speak）`pet.badge`
 （宠物脚下折叠徽标，需宿主 ≥0.19.0，老宿主自动降级）`ui`（面板开关）`events` `scheduler`。
@@ -32,8 +33,10 @@
 点击 Codex App 任务行时经系统 `open codex://threads/<id>` 跳转（只接受 UUID 形态的任务 id）。
 实测事实见 `fixtures/codex-ipc-facts.md`。
 
-**不采集也不上传任何对话内容**；状态文件只含任务标识、目录名、状态与时间戳。
-无遥测、无自更新、无远程资源。
+**不上传任何数据**；状态文件只含任务标识、目录名、状态、时间戳与**会话标题**——
+标题取自首条 prompt 的**首行（64 码点截断）**，这是状态文件里唯一一段对话来源的文本，
+除此之外不采集对话正文。Codex 会话优先显示 Codex 自己生成的线程标题（只读查
+`~/.codex` 线程目录，不落入状态文件）。无遥测、无自更新、无远程资源。
 
 ## 开发
 

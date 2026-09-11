@@ -658,3 +658,40 @@ test('stale 文案不与 idle/done 混淆（绝不误报完成）', () => {
   assert.notStrictEqual(row.subline, t('state.done'), 'unknown 绝不能显示成已完成');
   assert.notStrictEqual(row.subline, t('state.idle'));
 });
+
+// ================================================================
+// US-9 会话标题：titleFor 注入 > 落盘 title > 无（panel 回落 project）
+// ================================================================
+
+test('title 优先级：注入解析 > 落盘兜底；都没有则行上无 title 字段', () => {
+  const dir = tmp();
+  const snap = seed(dir, [
+    rec({ sessionId: 'ta', agent: 'codex', threadId: '01a08a1d-4f63-7e30-af03-48ae77b414b5',
+      title: '首条 prompt 兜底名', lastEvent: 'UserPromptSubmit' }),
+    rec({ sessionId: 'tb', title: '只有落盘名' }),
+    rec({ sessionId: 'tc' })
+  ]);
+  const { rows } = run(snap, {
+    titleFor: (r) => (r.threadId ? 'AI 生成的线程标题' : null)
+  });
+  const by = Object.fromEntries(rows.map((r) => [r.sessionId, r]));
+  assert.strictEqual(by.ta.title, 'AI 生成的线程标题', '解析器命中时覆盖落盘兜底');
+  assert.strictEqual(by.tb.title, '只有落盘名', '解析器 miss 时用落盘 title');
+  assert.ok(!('title' in by.tc), '两样都没有就不造 title 字段（panel 回落 project）');
+});
+
+test('titleFor 抛错不打死聚合，落回落盘兜底', () => {
+  const dir = tmp();
+  const snap = seed(dir, [rec({ sessionId: 'tx', title: '兜底名' })]);
+  const { rows } = run(snap, { titleFor: () => { throw new Error('存储读挂了'); } });
+  assert.strictEqual(rows.length, 1);
+  assert.strictEqual(rows[0].title, '兜底名');
+});
+
+test('不注入 titleFor 时行为不变（向后兼容：老调用方拿到的行结构只多不改）', () => {
+  const dir = tmp();
+  const snap = seed(dir, [rec({ sessionId: 'ty', title: '落盘名' })]);
+  const { rows } = run(snap, {});
+  assert.strictEqual(rows[0].title, '落盘名');
+  assert.strictEqual(rows[0].project, 'demo', 'project 字段原样保留');
+});

@@ -128,7 +128,10 @@ function fakeIpcFactory() {
 function collectorOn(dir, over) {
   return tool.createCollector(Object.assign({
     dir, now: () => T0, isPidAlive: () => true, t,
-    createCodexIpc: fakeIpcFactory().factory
+    createCodexIpc: fakeIpcFactory().factory,
+    // 标题解析器必须注入：默认实现会读真实 ~/.codex 线程目录（隔离红线），
+    // 且本套件的 App 行用的是实录 conversationId——在维护者机器上真能查到标题
+    threadTitles: { lookup: () => null }
   }, over));
 }
 
@@ -560,6 +563,28 @@ const GUARD_BEFORE = guardSnapshot(GUARD_PATHS);
     assert.ok(app, 'App 任务没进快照');
     assert.strictEqual(app.form, 'app');
     assert.strictEqual(app.state, 'running');
+    await c.stop(m.pet);
+  });
+
+  await test('US-9 标题接线：codex 行按 threadId 走注入解析器，快照行带解析出的标题', async () => {
+    const dir = tmp();
+    const m = mockPet();
+    const asked = [];
+    const c = collectorOn(dir, {
+      threadTitles: { lookup: (id) => { asked.push(id); return id === '01a08a1d-4f63-7e30-af03-48ae77b414b5' ? '查找 Codex 宠物多会话管理' : null; } }
+    });
+    sf.writeStatus(rec({
+      sessionId: '01a08a1d-4f63-7e30-af03-48ae77b414b5', agent: 'codex',
+      threadId: '01a08a1d-4f63-7e30-af03-48ae77b414b5', title: '兜底名', state: 'running', ts: T0
+    }), dir);
+    sf.writeStatus(rec({ sessionId: 'cc', agent: 'claude-code', title: '首条 prompt 名', ts: T0 }), dir);
+    await c.start(m.pet);
+    const rows = m.state.snapshots()[0].data.rows;
+    const cx = rows.find((r) => r.sessionId !== 'cc');
+    const cl = rows.find((r) => r.sessionId === 'cc');
+    assert.strictEqual(cx.title, '查找 Codex 宠物多会话管理', '解析器标题没进快照');
+    assert.strictEqual(cl.title, '首条 prompt 名', 'claude 行用落盘兜底标题');
+    assert.ok(!asked.includes(undefined) && !asked.some((id) => id == null), '无 threadId 的行不该问解析器');
     await c.stop(m.pet);
   });
 

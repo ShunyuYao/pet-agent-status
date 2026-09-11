@@ -512,7 +512,11 @@ body{
     main.className = 'main';
     var project = document.createElement('div');
     project.className = 'project';
-    project.textContent = row.project || '';
+    // 行主标签 = 会话自己的名字（US-9：线程 AI 标题 / 首条 prompt 首行，厂牌无关——
+    // 名字从哪来由 tool 侧解析注入，这里只认 row.title），没有名字才回落项目目录名；
+    // 目录名转进 tooltip，鼠标悬停仍能看到在哪个仓库
+    project.textContent = row.title || row.project || '';
+    if (row.title && row.project && row.title !== row.project) project.title = row.project;
     var sub = document.createElement('div');
     sub.className = 'subline';
     sub.textContent = row.subline || '';

@@ -280,19 +280,36 @@ test('pid 越过中间进程指向 agent 本体，不是 hook 自己、也不是
   assert.ok(got === middlePid || got === process.pid || got > 0, 'pid 指向存活的祖先进程');
 });
 
-test('不采集会话正文：prompt / last_assistant_message 不落盘', () => {
-  // 实录夹具里 user-prompt-submit 带 prompt、stop 带 last_assistant_message，
-  // 正是最容易顺手写进状态文件的两个字段（README：不采集也不上传任何对话内容）。
-  for (const name of ['user-prompt-submit.json', 'stop.json']) {
-    const dir = tmp();
-    const fx = fixtureOf(name);
-    runFixture(name, dir);
-    const raw = fs.readFileSync(path.join(dir, fs.readdirSync(dir).filter((n) => n.endsWith('.json'))[0]), 'utf8');
-    for (const key of ['prompt', 'last_assistant_message', 'transcript_path', 'model']) {
-      if (fx[key] == null) continue;
-      assert.ok(!raw.includes(String(fx[key])), `${name} 的 ${key} 内容落盘了`);
-    }
+test('不采集会话正文：正文类字段除 title 让步边界外不落盘', () => {
+  // US-9 显式让步：prompt 的**首行（64 码点截断）**作为标题落盘，此外的正文仍一律不许。
+  // last_assistant_message / transcript_path / model 完全不许出现。
+  const dir = tmp();
+  const fx = fixtureOf('user-prompt-submit.json');
+  const body = 'CODEX-SECRET-第二行正文不许落盘';
+  runHook(Object.assign({}, fx, { prompt: `${fx.prompt}\n${body}` }), dir);
+  const rawUp = fs.readFileSync(path.join(dir, fs.readdirSync(dir).filter((n) => n.endsWith('.json'))[0]), 'utf8');
+  assert.strictEqual(JSON.parse(rawUp).title, sf.normalizeTitle(fx.prompt), '标题=prompt 首行经 normalizeTitle');
+  assert.ok(!rawUp.includes(body), 'prompt 第二行起（正文）落盘了');
+
+  const dir2 = tmp();
+  const fxStop = fixtureOf('stop.json');
+  runFixture('stop.json', dir2);
+  const rawStop = fs.readFileSync(path.join(dir2, fs.readdirSync(dir2).filter((n) => n.endsWith('.json'))[0]), 'utf8');
+  for (const key of ['last_assistant_message', 'transcript_path', 'model']) {
+    if (fxStop[key] == null) continue;
+    assert.ok(!rawStop.includes(String(fxStop[key])), `stop.json 的 ${key} 内容落盘了`);
   }
+});
+
+test('US-9 标题首见定名（Codex 侧）：后续 prompt 不改名、无 prompt 事件不冲名', () => {
+  const dir = tmp();
+  const fx = fixtureOf('user-prompt-submit.json');
+  runHook(Object.assign({}, fx, { prompt: '排查内存泄漏' }), dir);
+  runHook(Object.assign({}, fx, { prompt: '换个话题写文档' }), dir);
+  runFixture('stop.json', dir);
+  const rec = readOnly(dir);
+  assert.strictEqual(rec.title, '排查内存泄漏');
+  assert.strictEqual(rec.state, 'done');
 });
 
 test('同一会话连续多事件只写一个文件，状态随最后一个事件走', () => {
@@ -599,8 +616,10 @@ test('零特判：同一份状态目录里 codex 与 claude 会话经同一 aggr
   const codexRow = out.rows.find((r) => r.agent === 'codex');
   const claudeRow = out.rows.find((r) => r.agent === 'claude-code');
   assert.ok(codexRow, 'codex 会话没进快照');
-  // 同构：除 agent/sessionId/project/cwd/ts/threadId 这些数据字段外，结构键集合必须一致
-  const shape = (r) => Object.keys(r).filter((k) => k !== 'threadId').sort().join(',');
+  // 同构：除 agent/sessionId/project/cwd/ts/threadId 这些数据字段外，结构键集合必须一致。
+  // threadId/title 是选填**数据**字段（这条 codex 行经真实 hook 带了 prompt→title，
+  // claude 对照行没带），有无由数据决定，不属于「按厂牌分叉的结构」。
+  const shape = (r) => Object.keys(r).filter((k) => k !== 'threadId' && k !== 'title').sort().join(',');
   assert.strictEqual(shape(codexRow), shape(claudeRow), 'codex 行与 claude 行结构不同构');
   assert.strictEqual(codexRow.state, 'running');
   assert.strictEqual(codexRow.subline, claudeRow.subline, '同状态副行文案应一致（走同一张表）');
@@ -676,6 +695,9 @@ test('端到端：codex hook 写入 → tool 采集 → panel 渲染出 codex �
     now: () => T0,
     isPidAlive: () => true,
     locale: 'zh-CN',
+    // 标题解析器注入空实现：默认实现会读真实 ~/.codex 线程目录（隔离红线），
+    // 且实录夹具的 threadId 在维护者机器上真能查到标题，会让断言依赖本机数据
+    threadTitles: { lookup: () => null },
     settingsFile: path.join(tmp(), 'settings.json'),
     codexHooksFile: hooksFileIn(tmp()),
     psTree: [
@@ -700,7 +722,10 @@ test('端到端：codex hook 写入 → tool 采集 → panel 渲染出 codex �
   const badge = rows[0].querySelector('.badge');
   assert.ok(badge.classList.contains('is-codex'), 'codex 会话没渲染成 codex 徽标');
   assert.strictEqual(rows[0].dataset.state, 'running');
+  // US-9：行主标签 = 会话标题（hook 从实录 prompt 首行落盘），目录名转 tooltip
   assert.strictEqual(rows[0].querySelector('.project').textContent,
+    sf.normalizeTitle(fixtureOf('user-prompt-submit.json').prompt));
+  assert.strictEqual(rows[0].querySelector('.project').title,
     path.basename(fixtureOf('user-prompt-submit.json').cwd));
   assert.strictEqual(rows[0].querySelector('.subline').textContent, t('state.running'));
 
@@ -747,6 +772,7 @@ test('端到端：带 tty 的 codex 行点击 → tool 真的尝试跳转，失�
   let runnerCalls = 0;
   const collector = tool.createCollector({
     dir, now: () => T0, isPidAlive: () => true, locale: 'zh-CN',
+    threadTitles: { lookup: () => null },   // 隔离：默认实现读真实 ~/.codex
     settingsFile: path.join(tmp(), 'settings.json'),
     codexHooksFile: hooksFileIn(tmp()),
     psTree: [
@@ -799,6 +825,7 @@ test('端到端：点 Codex 接入 → tool 真写临时 hooks.json → 面板�
 
   const collector = tool.createCollector({
     dir: tmp(), now: () => T0, isPidAlive: () => true, locale: 'zh-CN',
+    threadTitles: { lookup: () => null },   // 隔离：默认实现读真实 ~/.codex
     settingsFile: path.join(tmp(), 'settings.json'),
     codexHooksFile: codexFile,
     psTree: []
