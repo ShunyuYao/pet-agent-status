@@ -21,6 +21,7 @@ Figma：`UJimpWGl2hGkrbzxIVCAK5` 第 ⑤ 区（y≈1920 起）
 `panel.footer.hint`（"点击会话跳回终端 · 完成时宠物会提醒你"）换成一排可点 App 图标。
 
 - 未运行 → 拉起；已运行 → 切前台。两者都是 `open -b <bundleId>`（macOS 天然 activate 语义）
+- **图标水平居中**（autolayout `primaryAxisAlignItems:'CENTER'`），图标数量变化自动保持居中
 - 没装 → **整个图标不出现**，不做灰态（点不动的入口＝死链）
 - 右上绿点 = 该 App 有会话在跑，数据取现成 snapshot 的 `agent` 字段，**零新增采集**
 
@@ -35,6 +36,13 @@ Figma：`UJimpWGl2hGkrbzxIVCAK5` 第 ⑤ 区（y≈1920 起）
 ⚠️ Codex 没有独立的 `Codex.app`——`mdfind com.openai.codex` 解析到 `/Applications/ChatGPT.app`，
 `lsregister` 里 `codex:` scheme 也确由它注册。检测必须按 **bundleId**，不能按 `/Applications/Codex.app` 路径。
 
+### 底栏度量（定稿）
+
+- 分隔线 y=358（面板 420 高）→ 底栏带高 **62**（初稿 84，太宽）
+- 图标 34×34、间距 14、**水平居中**
+- 图标底 y=406，贴面板底 padding 14
+- 小标题「打开 App」删掉：占一整行且把视线拉到左边，与居中冲突
+
 ## 权限
 
 复用既有 `nodeAccess` 的 `child_process` spawn `open`（README 权限披露第 3 行已声明
@@ -42,6 +50,7 @@ Figma：`UJimpWGl2hGkrbzxIVCAK5` 第 ⑤ 区（y≈1920 起）
 
 ## 待拍板
 
-① 底栏是否保留一句极短文字说明（否则新手不知道会话行可点）
+① 小标题已删（见底栏度量）。代价＝新手不知道会话行可点；若要补，
+   建议放图标行右侧一句极短灰字，而不是恢复左上小标题
 ② 图标顺序固定 vs「有会话的排前面」（动态排序会跳动，倾向固定）
 ③ Codex 点击打开 ChatGPT.app 是否符合预期；若要的是 Codex CLI，那是终端不是 App，需另定义
