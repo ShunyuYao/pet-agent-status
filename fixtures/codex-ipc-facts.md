@@ -55,3 +55,39 @@
 
 内部路由与内部 IPC **均无公开稳定性承诺**。实现必须封装成可关闭、可替换的适配器：
 解帧失败/握手失败/未知版本 → 立即停用 IPC，退回 Hooks 通道，不影响面板既有功能。
+
+## 8. 2026-09-11 第二轮实测：被动通道的真实事件面（App 任务摄入的依据）
+
+> 探针方式同 §3（只读连接+被动监听），三次连接窗口，期间由用户在 Codex App
+> （ChatGPT.app 内）真实提交并跑完两个任务。原始帧存维护者本机会话记录。
+
+### 8.1 `thread-stream-state-changed` 对被动外部 client 不广播【实录·反证】
+
+两个任务全程（提交→运行→出结果）被动连接**一帧 stream-state 都收不到**，
+即便 App 正在跟随（following:true）该会话。结论：它只定向发给 App 内部订阅方
+（`broadcast` 帧带 `targetClientIds`，只发目标 client）。**被动摄入不能依赖它**；
+主动订阅 = 向未知 method 发请求，违反 §5 红线，不做。
+
+### 8.2 实录到的新消息（相对 §4 新增）
+
+| 消息 | 顶层字段 | params 字段 | 实录时机 |
+|---|---|---|---|
+| `broadcast` / `thread-read-state-changed` | `type, method, sourceClientId, params, version:3` | **`conversationId, hostId, hasUnreadTurn`**, `context{identity{kind,authMode}, executionHostKey}` | 回合结束时刻（两次任务各一条，均带 `hasUnreadTurn:true`） |
+| `broadcast` / `thread-queued-followups-changed` | 同上, `version:1` | **`conversationId, messages[]`** | 提交任务时刻（队列变化） |
+| `broadcast` / `client-status-changed` | `type, method, sourceClientId, version:0` | `clientId, clientType, status:'disconnected'` | 别的 client 断开时 |
+| `broadcast` / `query-cache-invalidate` | 同上 | `queryKey[]` | 与 queued-followups 同刻 |
+
+### 8.3 `hasUnreadTurn:true` = 回合结束的时序证据
+
+- 任务一：提交 07:03:08Z（ide-context/queued-followups 帧），`hasUnreadTurn:true` 于 07:03:36Z（任务约 28s，出结果时刻）。
+- 任务二（受控对时）：07:23:22Z 用户确认「还在跑」且 read-state 帧数为 0；07:24:27Z 帧到达，用户确认「刚跑完」。
+- 反例：两个任务**运行中**均无 read-state 帧 → 它不是开始信号。
+
+结论：`hasUnreadTurn:true` 可安全映射「回合完成（未读）」；`false` 表示用户已在 App 读过。
+这是被动通道里唯一有资格映射成 done 的信号（映射表见 PROTOCOL.md「IPC 事件 → state 映射」）。
+
+### 8.4 仍然拿不到的
+
+- 会话的工作目录/标题（`ide-context` 是发给别的 client 的 discovery 请求，与会话无可靠关联）→ App 任务 `project` 用品牌名兜底。
+- waiting（等批准）态：被动通道无对应信号，App 任务不会出现 waiting 行。
+- 精确的任务失败信号：无；停留 running 超时由采集器转 unknown 兜底。

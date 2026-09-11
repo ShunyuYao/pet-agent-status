@@ -25,6 +25,7 @@
 | `ts` | number | 是 | 本次写入的 Unix 毫秒 |
 | `threadId` | string | 否 | Codex 线程 id（UUID，供 `codex://threads/<id>` 深链接） |
 | `source` | `'hook'`\|`'ipc'`\|`'reconcile'` | 否 | 数据来源，hook 写入缺省为 `'hook'` |
+| `form` | `'cli'`\|`'app'` | 否 | 会话形态；缺省按 `'cli'` 读。`'app'` = Codex App 任务（2026-09-11 起由 IPC 摄入写入；schema 仍为 1——选填字段做加法，旧读者按未知字段忽略，不破坏向后兼容） |
 
 未知字段读取时忽略不报错；缺必填字段的文件按损坏跳过（不 crash 采集器）。
 
@@ -69,13 +70,28 @@ Codex 侧附加约定：
 
 ## Codex App 来源（US-8，source:'ipc'）
 
-App 任务与 CLI 会话在协议上同构，只有两处差别：
+App 任务与 CLI 会话在协议上同构，差别有三处：
 - `tty` 为 null（App 任务没有终端），`threadId` 必填且为 UUID —— 跳转据此走深链接而非 tty 聚焦
   （判定唯一实现在 `lib/codex-deeplink.js#pickNavigator`）。
 - `source: 'ipc'` 标明来自实时增强通道；`'hook'` 仍是 CLI 主通道。
+- `form: 'app'`；`sessionId` = `conversationId`（UUID）本身，`cwd` 为空串、`project` 为品牌名
+  `Codex App`（IPC 广播不携带工作目录，不猜、不从别的消息里凑）。
 
-IPC 只作为**增益信号**（当前仅「App 正在跟随哪个会话」），不作为会话存在性的唯一来源：
-未实录确认语义的事件一律忽略，**绝不映射成 done**（见 `fixtures/codex-ipc-facts.md` §5）。
+### IPC 事件 → state 映射（2026-09-11 实录，来源 `fixtures/codex-ipc-facts.md` §4/§8）
+
+| IPC 广播 | 写入 state | 语义依据 |
+|---|---|---|
+| `thread-queued-followups-changed`（带 `conversationId`） | `running` | 实录：提交任务时刻发出（队列清空/变化=该会话有新活动）。属启发式，误报由采集器 3min 无新事件转 unknown 兜底 |
+| `thread-read-state-changed` 且 `hasUnreadTurn === true` | `done` | 实录×2 + 反例×1：仅在回合结束时刻发出，运行中不发（时序实验见 facts §8）。**这是唯一允许映射为 done 的 IPC 信号** |
+| `thread-read-state-changed` 且 `hasUnreadTurn === false` | `ended`（仅更新已存在的 `source:'ipc'` 记录，绝不新建） | 用户在 App 里读过了 = 已结束展示；对没见过的会话新建一条 `ended` 是在报旧闻 |
+| `thread-stream-following-changed` | 不落盘 | 只进内存 following 集合，供聚焦（focus）同级优先 |
+| 其余（含 `thread-stream-state-changed`） | 忽略 | 实录证实被动外部 client **收不到** stream-state 广播（facts §8）；未实录语义一律不猜 |
+
+摄入保护：同 `sessionId` 已存在 `source` 非 `'ipc'` 的记录（CLI hooks 写的，含 tty 更富）时，
+IPC 摄入**跳过不覆盖**。IPC 记录的清理走既有 idle 淡出与 24h 文件清理，无独立生命周期。
+
+IPC 仍是**可关闭的增强通道**（设置里可关，故障自动停用退回 Hooks）；
+未实录确认语义的事件一律忽略，**绝不映射成 done**（见 `fixtures/codex-ipc-facts.md` §5/§8）。
 
 ## 路径覆盖约定（测试隔离）
 

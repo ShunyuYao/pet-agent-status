@@ -93,18 +93,42 @@ function mockPet(opts) {
     pet: {
       bubble: (text) => state.petCalls.push(['bubble', text]),
       playAnim: (name) => state.petCalls.push(['playAnim', name])
+    },
+    storage: {
+      async get(key) { return state.storage.get(key); },
+      async set(key, value) { state.storage.set(key, value); }
     }
   };
+  state.storage = new Map(Object.entries(o.storage || {}));
   // 每轮 tick 推的不止快照一条（还有接入态 agent-status:install-state），
   // 所以「这轮推了几次快照」必须按事件名筛，不能数 emitted 的长度。
   state.snapshots = () => state.emitted.filter((e) => e.name === tool.SNAPSHOT_EVENT);
   return { pet, state, liveCount: () => live.size };
 }
 
+// 假 IPC 工厂：记录启停，绝不碰真 socket（IPC 默认开，不注入的话
+// 采集器会去连真实 ~/.codex/ipc/ipc.sock，退避重连的真 setTimeout 还会吊死测试进程）
+function fakeIpcFactory() {
+  const f = { instances: [] };
+  f.factory = (deps) => {
+    const inst = {
+      deps, started: 0, stopped: 0, state: 'idle',
+      start() { this.started++; this.state = 'ready'; },
+      stop() { this.stopped++; this.state = 'idle'; },
+      followingIds() { return []; },
+      isFollowing() { return false; }
+    };
+    f.instances.push(inst);
+    return inst;
+  };
+  return f;
+}
+
 // 采集器一律注入依赖，绝不落到真实目录/时钟/进程上
 function collectorOn(dir, over) {
   return tool.createCollector(Object.assign({
-    dir, now: () => T0, isPidAlive: () => true, t
+    dir, now: () => T0, isPidAlive: () => true, t,
+    createCodexIpc: fakeIpcFactory().factory
   }, over));
 }
 
@@ -338,7 +362,11 @@ const GUARD_BEFORE = guardSnapshot(GUARD_PATHS);
     const m = mockPet();
     const dir = tmp();
     const prev = process.env.PET_AGENT_STATUS_DIR;
+    const prevCodexHome = process.env.CODEX_HOME;
     process.env.PET_AGENT_STATUS_DIR = dir;   // activate 不带参，走默认状态目录
+    // IPC 默认开：activate 无依赖注入，把 socket 路径也指进临时目录（不存在 → 只是连不上，
+    // 绝不触真实 ~/.codex；deactivate 会停掉适配器清干净重连定时器）
+    process.env.CODEX_HOME = dir;
     try {
       await tool.activate(m.pet);
       assert.strictEqual(m.state.every.length, 1);
@@ -351,6 +379,8 @@ const GUARD_BEFORE = guardSnapshot(GUARD_PATHS);
     } finally {
       if (prev === undefined) delete process.env.PET_AGENT_STATUS_DIR;
       else process.env.PET_AGENT_STATUS_DIR = prev;
+      if (prevCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = prevCodexHome;
     }
   });
 
@@ -460,8 +490,9 @@ const GUARD_BEFORE = guardSnapshot(GUARD_PATHS);
     // badge 自 0.3.0 起使用（宿主 0.19.0 的 pet.badge.*，experimental 档）。
     // 这份白名单是 AGENTS.md 插件形态红线的守卫：新增 SDK 面必须**同时**更新它与 README
     // 的能力披露，不许靠放宽断言蒙混——它刚刚真的拦下了一次未登记的新面。
-    // settings 自 0.4.0 起使用（读 codexIpcEnabled 开关）。新增 SDK 面必须同时更新本白名单与 README。
-    const allowed = new Set(['scheduler', 'events', 'pet', 'badge', 'settings']);
+    // storage 自 0.5.0 起使用（codexIpcEnabled 开关的唯一真相源；0.4.x 的 settings 面已弃用——
+    // manifest 设置项只有宿主设置页能写、panel 写不了，两处开关必漂）。
+    const allowed = new Set(['scheduler', 'events', 'pet', 'badge', 'storage']);
     for (const ns of touched) {
       assert.ok(allowed.has(ns), `碰了未披露的 SDK 面 pet.${ns}（AGENTS.md 插件形态红线）`);
     }
@@ -469,6 +500,67 @@ const GUARD_BEFORE = guardSnapshot(GUARD_PATHS);
     for (const must of ['events', 'pet', 'scheduler']) {
       assert.ok(touched.has(must), `采集器应当使用 pet.${must}`);
     }
+  });
+
+  // ---- 5.6 Codex App IPC 增强：默认开 + 设置切换（US-8 设置面板）----
+
+  await test('IPC 默认开：storage 没存过值时 start 即连（假工厂）', async () => {
+    const f = fakeIpcFactory();
+    const m = mockPet();   // storage 为空 = 用户从没动过开关
+    const c = collectorOn(tmp(), { createCodexIpc: f.factory });
+    await c.start(m.pet);
+    assert.strictEqual(f.instances.length, 1, '默认应创建 IPC 适配器');
+    assert.strictEqual(f.instances[0].started, 1);
+    assert.strictEqual(c.ipcEnabled, true);
+    // 设置态事件也要推（panel 的设置视图靠它翻面）
+    const st = m.state.emitted.filter((e) => e.name === tool.SETTINGS_STATE_EVENT);
+    assert.ok(st.length >= 1, '没推 settings-state，设置视图永远空白');
+    assert.strictEqual(st[st.length - 1].data.codexIpcEnabled, true);
+    await c.stop(m.pet);
+    assert.strictEqual(f.instances[0].stopped, 1, 'stop 后 IPC 该断开');
+  });
+
+  await test('storage 存过 false → 不连；panel 发开启意图 → 真连 + 落 storage + 回推', async () => {
+    const f = fakeIpcFactory();
+    const m = mockPet({ storage: { [tool.IPC_ENABLED_KEY]: false } });
+    const c = collectorOn(tmp(), { createCodexIpc: f.factory });
+    await c.start(m.pet);
+    assert.strictEqual(f.instances.length, 0, '显式关着就不该连');
+    assert.strictEqual(c.ipcEnabled, false);
+    // panel 设置视图拨开开关（真实用户动作等价物 = set-setting 意图事件）
+    const handler = m.state.handlers.get(tool.SET_SETTING_EVENT);
+    assert.ok(handler, 'tool 没订阅 set-setting —— 设置开关是死的');
+    handler({ key: tool.IPC_ENABLED_KEY, value: true });
+    await new Promise((r) => setImmediate(r));   // handleSetSetting 是 async
+    assert.strictEqual(f.instances.length, 1, '开启意图没让 IPC 连上');
+    assert.strictEqual(m.state.storage.get(tool.IPC_ENABLED_KEY), true, '开关值没落 storage');
+    const st = m.state.emitted.filter((e) => e.name === tool.SETTINGS_STATE_EVENT);
+    assert.strictEqual(st[st.length - 1].data.codexIpcEnabled, true);
+    // 再关回去
+    handler({ key: tool.IPC_ENABLED_KEY, value: false });
+    await new Promise((r) => setImmediate(r));
+    assert.strictEqual(f.instances[0].stopped, 1, '关闭意图没断开 IPC');
+    assert.strictEqual(m.state.storage.get(tool.IPC_ENABLED_KEY), false);
+    await c.stop(m.pet);
+  });
+
+  await test('IPC 摄入回调接到状态目录：activity 帧等价调用 → 下一轮 tick 出 App 行', async () => {
+    const dir = tmp();
+    const f = fakeIpcFactory();
+    const m = mockPet();
+    const c = collectorOn(dir, { createCodexIpc: f.factory });
+    await c.start(m.pet);
+    const cid = '01a08a1d-4f63-7e30-af03-48ae77b414b5';
+    // 适配器解出 activity 后就调这个回调（帧→回调链路由 codex-ipc-test/ingest-test 各自守）
+    f.instances[0].deps.onActivity(cid);
+    m.state.emitted.length = 0;
+    m.state.every[0].fn();
+    const rows = m.state.snapshots()[0].data.rows;
+    const app = rows.find((r) => r.sessionId === cid);
+    assert.ok(app, 'App 任务没进快照');
+    assert.strictEqual(app.form, 'app');
+    assert.strictEqual(app.state, 'running');
+    await c.stop(m.pet);
   });
 
   // ---- 6. 隔离自证 ----

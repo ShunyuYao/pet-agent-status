@@ -62,15 +62,40 @@ test('只认实录事件：following 生效', () => {
   assert.deepStrictEqual(ev, { kind: 'following', conversationId: 'c1', following: true });
 });
 
-test('【调研】未复现的事件一律忽略，绝不映射成 done', () => {
-  for (const m of ['thread-stream-state-changed', 'thread-read-state-changed', 'thread-archived',
-    'thread-queued-followups-changed', 'query-cache-invalidate', '完全没见过的事件']) {
-    assert.strictEqual(ipc.interpret({ type: 'broadcast', method: m, params: {} }), null, m);
+test('未实录语义的事件一律忽略，绝不映射成 done（facts §5/§8.1）', () => {
+  // thread-stream-state-changed 是 §8.1 实录反证：被动 client 收不到，永远别加进映射
+  for (const m of ['thread-stream-state-changed', 'thread-archived', 'thread-unarchived',
+    'query-cache-invalidate', 'client-status-changed', '完全没见过的事件']) {
+    assert.strictEqual(ipc.interpret({ type: 'broadcast', method: m, params: { conversationId: 'c1' } }), null, m);
   }
 });
 
-test('following 缺 conversationId 时忽略（不造半条状态）', () => {
-  assert.strictEqual(ipc.interpret({ type: 'broadcast', method: 'thread-stream-following-changed', params: { following: true } }), null);
+test('activity：queued-followups 变化 →（提交时刻信号，facts §8.2）', () => {
+  const ev = ipc.interpret({ type: 'broadcast', method: 'thread-queued-followups-changed',
+    params: { conversationId: 'c1', messages: [] } });
+  assert.deepStrictEqual(ev, { kind: 'activity', conversationId: 'c1' });
+});
+
+test('read-state：hasUnreadTurn 布尔原样带出（facts §8.3 时序实验）', () => {
+  const t1 = ipc.interpret({ type: 'broadcast', method: 'thread-read-state-changed',
+    params: { conversationId: 'c1', hostId: 'local', hasUnreadTurn: true } });
+  assert.deepStrictEqual(t1, { kind: 'read-state', conversationId: 'c1', hasUnreadTurn: true });
+  const t2 = ipc.interpret({ type: 'broadcast', method: 'thread-read-state-changed',
+    params: { conversationId: 'c1', hasUnreadTurn: false } });
+  assert.deepStrictEqual(t2, { kind: 'read-state', conversationId: 'c1', hasUnreadTurn: false });
+});
+
+test('read-state 缺 hasUnreadTurn 或非布尔时忽略（缺字段不猜）', () => {
+  for (const bad of [{}, { hasUnreadTurn: 'true' }, { hasUnreadTurn: 1 }, { hasUnreadTurn: null }]) {
+    assert.strictEqual(ipc.interpret({ type: 'broadcast', method: 'thread-read-state-changed',
+      params: Object.assign({ conversationId: 'c1' }, bad) }), null, JSON.stringify(bad));
+  }
+});
+
+test('三个已映射事件缺 conversationId 时都忽略（不造半条状态）', () => {
+  for (const m of ['thread-stream-following-changed', 'thread-queued-followups-changed', 'thread-read-state-changed']) {
+    assert.strictEqual(ipc.interpret({ type: 'broadcast', method: m, params: { following: true, hasUnreadTurn: true } }), null, m);
+  }
 });
 
 // ---- ②④ 连接生命周期（全注入，不碰真 socket）----
@@ -164,6 +189,41 @@ test('following 集合随广播增删，stop 后清空', () => {
   h.api.stop();
   assert.deepStrictEqual(h.api.followingIds(), []);
   assert.deepStrictEqual(seen, [['c1', true], ['c1', false]]);
+});
+
+test('activity/read-state 帧经真实数据链路触达摄入回调', () => {
+  const acts = [];
+  const reads = [];
+  const s = mockSock();
+  const api = ipc.createCodexIpc({
+    socketPath: '/fake/ipc.sock', connect: () => s, randomUUID: () => 'u',
+    setTimer: () => ({}), clearTimer: () => {},
+    onActivity: (id) => acts.push(id), onReadState: (id, un) => reads.push([id, un])
+  });
+  api.start();
+  s.emit('connect');
+  s.emit('data', frameOf({ type: 'response', method: 'initialize' }));
+  s.emit('data', frameOf({ type: 'broadcast', method: 'thread-queued-followups-changed', params: { conversationId: 'c9', messages: [] } }));
+  s.emit('data', frameOf({ type: 'broadcast', method: 'thread-read-state-changed', params: { conversationId: 'c9', hasUnreadTurn: true } }));
+  s.emit('data', frameOf({ type: 'broadcast', method: 'thread-read-state-changed', params: { conversationId: 'c9', hasUnreadTurn: false } }));
+  assert.deepStrictEqual(acts, ['c9']);
+  assert.deepStrictEqual(reads, [['c9', true], ['c9', false]]);
+});
+
+test('摄入回调抛异常不反杀适配器', () => {
+  const s = mockSock();
+  const api = ipc.createCodexIpc({
+    socketPath: '/fake/ipc.sock', connect: () => s, randomUUID: () => 'u',
+    setTimer: () => ({}), clearTimer: () => {},
+    onActivity: () => { throw new Error('boom'); },
+    onReadState: () => { throw new Error('boom'); }
+  });
+  api.start();
+  s.emit('connect');
+  s.emit('data', frameOf({ type: 'response', method: 'initialize' }));
+  s.emit('data', frameOf({ type: 'broadcast', method: 'thread-queued-followups-changed', params: { conversationId: 'c1', messages: [] } }));
+  s.emit('data', frameOf({ type: 'broadcast', method: 'thread-read-state-changed', params: { conversationId: 'c1', hasUnreadTurn: true } }));
+  assert.strictEqual(api.state, 'ready', '适配器应活着');
 });
 
 test('消费方回调抛异常不反杀适配器', () => {

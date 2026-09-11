@@ -247,8 +247,9 @@ test('manifest.json 符合宿主 loadManifest 的校验规则', () => {
 
   const KINDS = ['tool', 'panel', 'asset', 'skill', 'settings', 'service', 'dashboard-card'];
   assert.ok(Array.isArray(m.kind) && m.kind.length && m.kind.every((k) => KINDS.includes(k)));
-  // settings 自 0.4.0 起加入：Codex App 实时增强的开关（manifest entry.settings）
-  assert.deepStrictEqual(m.kind, ['tool', 'panel', 'settings']);
+  // settings kind 0.4.x 短暂用过（宿主设置页开关），0.5.0 撤下：开关唯一真相源改为
+  // pet.storage + 面板设置视图 —— manifest 设置项只有宿主设置页能写，两处开关必漂
+  assert.deepStrictEqual(m.kind, ['tool', 'panel']);
 
   assert.deepStrictEqual(m.permissions, ['storage', 'pet', 'ui', 'events', 'scheduler']);
 
@@ -323,6 +324,26 @@ test('lib/ hooks/ 代码里没有中文字面量（中文只许在 locales/*.jso
   }
   assert.ok(scanned.includes('hooks'), 'hooks/ 已存在就必须被扫到');
   assert.deepStrictEqual(offenders, [], `发现硬编码中文：\n${offenders.join('\n')}`);
+});
+
+test('form 选填字段：合法值写入、非法值不写、读回校验（PROTOCOL.md schema:1 加法）', () => {
+  const dir = tmp();
+  const { record } = sf.writeStatus({
+    agent: 'codex', sessionId: '01a08a1d-4f63-7e30-af03-48ae77b414b5', cwd: '',
+    project: 'Codex App', tty: null, pid: null, state: 'running',
+    lastEvent: 'ipc:queued-followups-changed', source: 'ipc', form: 'app', ts: 1789000000000
+  }, dir);
+  assert.strictEqual(record.form, 'app');
+  assert.strictEqual(sf.validateRecord(record), null);
+  // 非法 form：写入时不落该字段（不造假形态）
+  const r2 = sf.buildRecord({ agent: 'codex', sessionId: 'x', cwd: '/p', state: 'running', lastEvent: 'e', ts: 1, form: 'browser' });
+  assert.ok(!('form' in r2), '非法 form 不该落盘');
+  // 读回校验：文件里出现非法 form 按损坏处理
+  assert.strictEqual(sf.validateRecord(Object.assign({}, record, { form: 'browser' })), 'bad-form');
+  // 缺省（老文件没有 form）仍合法
+  const legacy = Object.assign({}, record);
+  delete legacy.form;
+  assert.strictEqual(sf.validateRecord(legacy), null, '没有 form 的旧记录必须继续可读');
 });
 
 for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });

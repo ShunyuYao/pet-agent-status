@@ -138,6 +138,43 @@ body{
    hooks.state，所以必须把这一步明确告诉用户，否则钩子装了却"没反应" */
 .codex-trust{margin-top:6px;font-size:10.5px;color:var(--warning);line-height:1.6}
 .footer{margin-top:12px;font-size:10.5px;color:var(--gray);text-align:center}
+/* ---- 设置视图（DESIGN.md「面板 · 设置视图」：复用既有 token，不发明新样式） ---- */
+.gear{-webkit-app-region:no-drag;
+  margin-left:auto;background:none;border:0;cursor:pointer;
+  color:var(--gray);font-size:14px;line-height:1;padding:2px 4px;
+}
+.gear:hover{color:#fff}
+/* gear 抢了 margin-left:auto，close 不再需要 */
+.topbar .close{margin-left:0}
+.settings{display:flex;flex-direction:column;gap:8px}
+.set-group{background:var(--row-bg);border-radius:12px;padding:10px}
+.set-head{display:flex;align-items:center;gap:10px}
+.set-actions{display:flex;align-items:center;gap:10px;margin-top:8px}
+.set-label{flex:1;font-size:13px;color:#fff}
+.set-desc{margin-top:6px;font-size:11px;color:var(--gray);line-height:1.6}
+.set-status{margin-top:6px;font-size:11px;color:var(--gray)}
+.set-status.is-ready{color:var(--success)}
+.set-status.is-disabled{color:var(--warning)}
+.set-installed{font-size:11px;color:var(--success)}
+.set-not-installed{font-size:11px;color:var(--gray)}
+.set-btn{
+  background:var(--primary);color:#fff;border:0;border-radius:8px;
+  padding:5px 12px;font-size:11.5px;font-family:inherit;cursor:pointer;
+}
+.set-btn.is-remove{background:none;color:var(--gray);text-decoration:underline;padding:5px 4px}
+/* 开关：胶囊 34×20，开 = Primary 蓝、关 = 灰 25%（DESIGN.md 设置视图） */
+.switch{position:relative;width:34px;height:20px;flex:0 0 34px}
+.switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
+.switch .knob{
+  position:absolute;inset:0;border-radius:999px;background:rgba(255,255,255,.25);
+  transition:background .15s;pointer-events:none;
+}
+.switch .knob::after{
+  content:'';position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;
+  background:#fff;transition:left .15s;
+}
+.switch input:checked + .knob{background:var(--primary)}
+.switch input:checked + .knob::after{left:16px}
 [hidden]{display:none !important}
 </style>
 </head>
@@ -145,7 +182,42 @@ body{
   <div class="topbar">
     <span class="title" id="title"></span>
     <span class="summary" id="summary" hidden><span class="summary-dot"></span><span id="summary-text"></span></span>
+    <button class="gear" id="gear" type="button">⚙</button>
     <button class="close" id="close" type="button">✕</button>
+  </div>
+
+  <div class="settings" id="settings" hidden>
+    <div class="set-group">
+      <div class="set-head">
+        <span class="set-label" id="ipc-label"></span>
+        <span class="switch"><input type="checkbox" id="ipc-toggle"><span class="knob"></span></span>
+      </div>
+      <div class="set-desc" id="ipc-desc"></div>
+      <div class="set-status" id="ipc-status"></div>
+    </div>
+    <div class="set-group">
+      <div class="set-head">
+        <span class="set-label" id="set-claude-label"></span>
+        <span class="set-installed" id="set-claude-installed" hidden></span>
+        <span class="set-not-installed" id="set-claude-not" hidden></span>
+      </div>
+      <div class="set-actions">
+        <button class="set-btn" id="set-claude-install" type="button" hidden></button>
+        <button class="set-btn is-remove" id="set-claude-remove" type="button" hidden></button>
+      </div>
+    </div>
+    <div class="set-group">
+      <div class="set-head">
+        <span class="set-label" id="set-codex-label"></span>
+        <span class="set-installed" id="set-codex-installed" hidden></span>
+        <span class="set-not-installed" id="set-codex-not" hidden></span>
+      </div>
+      <div class="set-actions">
+        <button class="set-btn" id="set-codex-install" type="button" hidden></button>
+        <button class="set-btn is-remove" id="set-codex-remove" type="button" hidden></button>
+      </div>
+      <div class="codex-trust" id="set-codex-trust" hidden></div>
+    </div>
   </div>
 
   <div class="list" id="list"></div>
@@ -176,6 +248,8 @@ body{
   var EV_INSTALL_CODEX = 'agent-status:install-codex';
   var EV_UNINSTALL_CODEX = 'agent-status:uninstall-codex';
   var EV_JUMP = 'agent-status:jump';
+  var EV_SETTINGS_STATE = 'agent-status:settings-state';
+  var EV_SET_SETTING = 'agent-status:set-setting';
 
   // ---- 厂牌 SVG：assets/claude.svg / assets/openai.svg 的内联副本 ----
   // 内联而非 <img src>：panel 以 file:// 加载，CSP 的 img-src 'self' 对 file:// 源不可靠，
@@ -204,7 +278,20 @@ body{
       'empty.uninstallCodex': '移除 Codex 钩子',
       'empty.codexTrust': '下次启动 Codex 时请选择「Trust all and continue」以启用钩子',
       'empty.installed': '已接入 ✓',
-      'empty.uninstall': '移除钩子'
+      'empty.uninstall': '移除钩子',
+      'settings.title': '设置',
+      'settings.ipc.label': 'Codex App 实时增强',
+      'settings.ipc.desc': '连接 Codex App 的本地接口，实时显示 App 里的任务并感知跟随状态。接口无官方稳定性承诺，出问题会自动停用并退回钩子通道。',
+      'settings.ipc.ready': '已连接',
+      'settings.ipc.connecting': '未连接（等待 Codex App）',
+      'settings.ipc.disabled': '已自动停用（协议异常，退回钩子通道）',
+      'settings.ipc.off': '已关闭',
+      'settings.hooks.claude': 'Claude Code 钩子',
+      'settings.hooks.codex': 'Codex CLI 钩子',
+      'settings.hooks.installed': '已接入 ✓',
+      'settings.hooks.notInstalled': '未接入',
+      'settings.hooks.install': '一键接入',
+      'settings.hooks.remove': '移除钩子'
     },
     en: {
       'panel.title': 'Agent Sessions',
@@ -220,7 +307,20 @@ body{
       'empty.uninstallCodex': 'Remove Codex hooks',
       'empty.codexTrust': 'Next time you start Codex, choose "Trust all and continue" to enable the hooks',
       'empty.installed': 'Installed ✓',
-      'empty.uninstall': 'Remove hooks'
+      'empty.uninstall': 'Remove hooks',
+      'settings.title': 'Settings',
+      'settings.ipc.label': 'Codex App live updates',
+      'settings.ipc.desc': 'Connects to the Codex App local interface to show App tasks in real time. The interface has no official stability guarantee; on errors it auto-disables and falls back to hooks.',
+      'settings.ipc.ready': 'Connected',
+      'settings.ipc.connecting': 'Not connected (waiting for Codex App)',
+      'settings.ipc.disabled': 'Auto-disabled (protocol error, fell back to hooks)',
+      'settings.ipc.off': 'Off',
+      'settings.hooks.claude': 'Claude Code hooks',
+      'settings.hooks.codex': 'Codex CLI hooks',
+      'settings.hooks.installed': 'Installed ✓',
+      'settings.hooks.notInstalled': 'Not installed',
+      'settings.hooks.install': 'Install',
+      'settings.hooks.remove': 'Remove hooks'
     }
   };
   // 与 lib/i18n.js 同一套策略：只区分中/英两档，取不到词就把 key 显出来（一眼看得出漏词）。
@@ -257,6 +357,14 @@ body{
   var elCodexInstalled = $('codex-installed');
   var elUninstallCodex = $('uninstall-codex');
   var elCodexTrust = $('codex-trust');
+  // 设置视图
+  var elSettings = $('settings');
+  var elGear = $('gear');
+  var elIpcToggle = $('ipc-toggle');
+  var elIpcStatus = $('ipc-status');
+  var settingsOpen = false;
+  var ipcState = 'off';
+  elIpcToggle.checked = true;   // 默认开（tool 的 settings-state 一到以它为准）
 
   // ---- 与 tool 侧通信：只经 pet.events（AGENTS.md 插件形态红线） ----
   var pet = window.pet || {};
@@ -286,6 +394,21 @@ body{
     elCodexInstalled.textContent = t('empty.codexInstalled');
     elUninstallCodex.textContent = t('empty.uninstallCodex');
     elCodexTrust.textContent = t('empty.codexTrust');
+    // 设置视图静态文案
+    $('ipc-label').textContent = t('settings.ipc.label');
+    $('ipc-desc').textContent = t('settings.ipc.desc');
+    $('set-claude-label').textContent = t('settings.hooks.claude');
+    $('set-codex-label').textContent = t('settings.hooks.codex');
+    $('set-claude-installed').textContent = t('settings.hooks.installed');
+    $('set-codex-installed').textContent = t('settings.hooks.installed');
+    $('set-claude-not').textContent = t('settings.hooks.notInstalled');
+    $('set-codex-not').textContent = t('settings.hooks.notInstalled');
+    $('set-claude-install').textContent = t('settings.hooks.install');
+    $('set-codex-install').textContent = t('settings.hooks.install');
+    $('set-claude-remove').textContent = t('settings.hooks.remove');
+    $('set-codex-remove').textContent = t('settings.hooks.remove');
+    $('set-codex-trust').textContent = t('empty.codexTrust');
+    paintIpcStatus();
   }
   paintStatic();
 
@@ -299,10 +422,61 @@ body{
   elUninstall.addEventListener('click', function () { emit(EV_UNINSTALL_CLAUDE, {}); });
   elInstallCodex.addEventListener('click', function () { emit(EV_INSTALL_CODEX, {}); });
   elUninstallCodex.addEventListener('click', function () { emit(EV_UNINSTALL_CODEX, {}); });
+  // 设置视图的按钮走同一批意图事件（改配置的活始终在 tool 侧）
+  $('set-claude-install').addEventListener('click', function () { emit(EV_INSTALL_CLAUDE, {}); });
+  $('set-claude-remove').addEventListener('click', function () { emit(EV_UNINSTALL_CLAUDE, {}); });
+  $('set-codex-install').addEventListener('click', function () { emit(EV_INSTALL_CODEX, {}); });
+  $('set-codex-remove').addEventListener('click', function () { emit(EV_UNINSTALL_CODEX, {}); });
+  elGear.addEventListener('click', function () {
+    settingsOpen = !settingsOpen;
+    $('title').textContent = settingsOpen ? t('settings.title') : t('panel.title');
+    syncViews();
+  });
+  elIpcToggle.addEventListener('change', function () {
+    emit(EV_SET_SETTING, { key: 'codexIpcEnabled', value: !!elIpcToggle.checked });
+  });
+
+  // IPC 连接态副行：颜色档随状态（ready 绿 / disabled 橙 / 其余灰）
+  function paintIpcStatus() {
+    var key = !elIpcToggle.checked ? 'settings.ipc.off'
+      : ipcState === 'ready' ? 'settings.ipc.ready'
+        : ipcState === 'disabled' ? 'settings.ipc.disabled'
+          : 'settings.ipc.connecting';
+    elIpcStatus.textContent = t(key);
+    elIpcStatus.className = 'set-status'
+      + (key === 'settings.ipc.ready' ? ' is-ready' : key === 'settings.ipc.disabled' ? ' is-disabled' : '');
+  }
+
+  // 设置视图里的钩子接入态翻面（与空态 renderInstallState 同一份 installed 状态）
+  function renderSettingsHooks() {
+    $('set-claude-installed').hidden = !installed;
+    $('set-claude-not').hidden = installed;
+    $('set-claude-install').hidden = installed;
+    $('set-claude-remove').hidden = !installed;
+    $('set-codex-installed').hidden = !codexInstalled;
+    $('set-codex-not').hidden = codexInstalled;
+    $('set-codex-install').hidden = codexInstalled;
+    $('set-codex-remove').hidden = !codexInstalled;
+    $('set-codex-trust').hidden = !codexInstalled;
+  }
+
+  // 视图三选一：设置打开 → 只显设置；否则列表/空态按快照内容走（render 里那套三态）
+  function syncViews() {
+    elSettings.hidden = !settingsOpen;
+    if (settingsOpen) {
+      elList.hidden = true;
+      elEmpty.hidden = true;
+      renderSettingsHooks();
+      paintIpcStatus();
+    } else {
+      render(lastSnapshot);
+    }
+  }
 
   // ---- 渲染 ----
   var installed = false;
   var codexInstalled = false;
+  var lastSnapshot = { rows: [], summary: { running: 0 } };
 
   function badgeOf(row) {
     var isCodex = row.agent === 'codex';
@@ -368,6 +542,7 @@ body{
   }
 
   function render(snapshot) {
+    lastSnapshot = snapshot || lastSnapshot;
     var rows = (snapshot && Array.isArray(snapshot.rows)) ? snapshot.rows : [];
     var summary = (snapshot && snapshot.summary) || {};
 
@@ -405,6 +580,8 @@ body{
     elEmpty.hidden = !(isEmpty && ready);
     elList.hidden = isEmpty;
     if (isEmpty && ready) renderInstallState();
+    // 设置视图打开时快照照常进来，但不许把列表/空态顶回来
+    if (settingsOpen) { elList.hidden = true; elEmpty.hidden = true; }
   }
 
   // 空态的接入按钮态机：未接入 → 蓝主按钮；已接入 → 「已接入 ✓」+ 移除钩子。
@@ -427,6 +604,13 @@ body{
     installed = !!(data && data.claude);
     codexInstalled = !!(data && data.codex);
     if (!elEmpty.hidden) renderInstallState();
+    if (settingsOpen) renderSettingsHooks();
+  });
+  on(EV_SETTINGS_STATE, function (data) {
+    if (!data) return;
+    elIpcToggle.checked = data.codexIpcEnabled !== false;
+    ipcState = typeof data.ipcState === 'string' ? data.ipcState : 'off';
+    paintIpcStatus();
   });
 
   // 首帧：先按空态渲染，等 tool 的第一份快照（tool 侧 start() 会立刻推一轮）

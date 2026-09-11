@@ -18,17 +18,19 @@
 | `child_process` spawn `ps` | 按会话的 tty 反查它属于哪个终端 App（决定这一行能否跳转） | 只读进程表，10 秒缓存 |
 | `child_process` spawn `osascript` | 点击会话行时聚焦 iTerm2 / Terminal.app 对应窗口标签页 | 仅跳转动作时 |
 | `child_process` spawn `open` | 点击 Codex App 任务时经 `codex://threads/<id>` 深链接跳转 | 仅跳转动作时 |
-| `net` 连接 `~/.codex/ipc/ipc.sock` | Codex App 实时增强（**默认关**）：只读监听任务跟随状态 | 仅开关打开时 |
+| `net` 连接 `~/.codex/ipc/ipc.sock` | Codex App 实时增强（**默认开，面板设置里可关**）：只读监听任务动态与跟随状态 | 开关打开时（默认）；故障自动停用 |
 
-另使用宿主 SDK：`storage` `pet`（bubble/playAnim/speak）`pet.badge`（宠物脚下折叠徽标，
-需宿主 ≥0.19.0，老宿主自动降级）`ui`（面板开关）`events` `scheduler` `settings`（读实验开关）。
+另使用宿主 SDK：`storage`（含实验开关持久化）`pet`（bubble/playAnim/speak）`pet.badge`
+（宠物脚下折叠徽标，需宿主 ≥0.19.0，老宿主自动降级）`ui`（面板开关）`events` `scheduler`。
 
-### Codex App 实时增强（默认关，实验）
+### Codex App 实时增强（默认开，实验；面板 ⚙ 设置里可关）
 
-开启后会连接 Codex App 的本地 IPC（`~/.codex/ipc/ipc.sock`，仅当前用户可访问）**只读监听**
-任务跟随状态，用于让宠物聚焦到你正在看的那个任务。该接口未获官方稳定性承诺，任何异常都会
-自动停用并退回默认的钩子通道。点击 Codex App 任务时经系统 `open codex://threads/<id>` 跳转
-（只接受 UUID 形态的任务 id）。实测事实见 `fixtures/codex-ipc-facts.md`。
+连接 Codex App 的本地 IPC（`~/.codex/ipc/ipc.sock`，仅当前用户可访问）**只读监听**，做两件事：
+① 把 App 里的任务摄入为面板会话行（提交 → 运行中；回合完成 → 已完成；映射表冻结在
+`PROTOCOL.md`，只映射实录确认过语义的事件，绝不误报完成）；② 感知你正在 App 里跟随哪个
+任务，让宠物聚焦它。该接口未获官方稳定性承诺，任何异常都会自动停用并退回默认的钩子通道。
+点击 Codex App 任务行时经系统 `open codex://threads/<id>` 跳转（只接受 UUID 形态的任务 id）。
+实测事实见 `fixtures/codex-ipc-facts.md`。
 
 **不采集也不上传任何对话内容**；状态文件只含任务标识、目录名、状态与时间戳。
 无遥测、无自更新、无远程资源。

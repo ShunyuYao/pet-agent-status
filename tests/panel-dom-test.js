@@ -49,6 +49,10 @@ function tmp() {
 //
 // events.on 存下回调，测试用 push(name, data) 从**宿主侧**推事件进去，
 // 与 tool 的 pet.events.emit 同一条通道；emit 记流水供断言意图。
+// 假 IPC 工厂：IPC 默认开，真实工厂会连本机真 socket 且吊住进程退出——测试一律注入
+function fakeIpc() {
+  return { start() {}, stop() {}, followingIds() { return []; }, isFollowing() { return false; }, state: 'idle' };
+}
 function mountPanel(opts) {
   const o = opts || {};
   const handlers = new Map();
@@ -523,7 +527,7 @@ test('tool 真的把 locale 随快照发出来（不是 panel 自说自话）', 
   };
   const dir = tmp();
   sf.writeStatus(rec({ sessionId: 'a', ts: T0 }), dir);
-  const c = tool.createCollector({ dir, locale: 'zh-CN', now: () => T0, isPidAlive: () => true });
+  const c = tool.createCollector({ dir, locale: 'zh-CN', now: () => T0, isPidAlive: () => true, createCodexIpc: fakeIpc });
   c.tick(petSide);
   const snap = emitted.find((e) => e.name === tool.SNAPSHOT_EVENT).data;
   assert.strictEqual(snap.locale, 'zh-CN', 'tool 没把 locale 随快照下发');
@@ -590,7 +594,7 @@ const pending = testAsync('端到端：点接入 → tool 真写 settings.json �
   };
 
   // panel 侧的 pet mock：emit 转投 tool 的 handler
-  const collector = tool.createCollector({ dir, settingsFile, now: () => T0, isPidAlive: () => true });
+  const collector = tool.createCollector({ dir, settingsFile, now: () => T0, isPidAlive: () => true, createCodexIpc: fakeIpc });
 
   panel = mountPanel();
   // 把 panel 的 emit 接到 tool 上（mountPanel 的 mock 只记流水，这里补上转发）
@@ -669,4 +673,93 @@ test('focus 行渲染 is-focus 标记（且只有一行）', () => {
   assert.strictEqual(focused.length, 1, 'is-focus 有且只有一行');
   assert.strictEqual(focused[0].dataset.sessionId, 'w', 'focus 应是 waiting 行');
   p2.close();
+});
+
+// ================= 5. 设置视图（US-8 设置面板） =================
+
+test('⚙ 打开设置：列表/空态隐藏、设置组可见；再点回列表', () => {
+  const snap = snapshotOf([rec({ sessionId: 'a', state: 'running', ts: T0 })]);
+  const p = mountPanel();
+  p.push('agent-status:snapshot', snap);
+  assert.strictEqual(p.$('#settings').hidden, true, '初始设置视图应隐藏');
+  p.$('#gear').dispatchEvent(new p.dom.window.Event('click'));
+  assert.strictEqual(p.$('#settings').hidden, false);
+  assert.strictEqual(p.$('#list').hidden, true, '设置打开时列表要藏');
+  assert.strictEqual(p.$('#empty').hidden, true);
+  // 设置打开期间快照照常进来，不许把列表顶回来
+  p.push('agent-status:snapshot', snap);
+  assert.strictEqual(p.$('#list').hidden, true, '快照到达不该顶掉设置视图');
+  p.$('#gear').dispatchEvent(new p.dom.window.Event('click'));
+  assert.strictEqual(p.$('#settings').hidden, true);
+  assert.strictEqual(p.$('#list').hidden, false, '关掉设置要回列表');
+  p.close();
+});
+
+test('IPC 开关默认勾选；settings-state 到达后以 tool 为准并显示连接状态', () => {
+  const p = mountPanel();
+  assert.strictEqual(p.$('#ipc-toggle').checked, true, '默认开');
+  p.push('agent-status:settings-state', { codexIpcEnabled: true, ipcState: 'ready' });
+  assert.strictEqual(p.$('#ipc-status').textContent, '已连接');
+  assert.ok(p.$('#ipc-status').classList.contains('is-ready'));
+  p.push('agent-status:settings-state', { codexIpcEnabled: true, ipcState: 'disabled' });
+  assert.ok(p.$('#ipc-status').classList.contains('is-disabled'), '停用态要橙色警示');
+  p.push('agent-status:settings-state', { codexIpcEnabled: false, ipcState: 'off' });
+  assert.strictEqual(p.$('#ipc-toggle').checked, false, 'tool 说关就是关');
+  assert.strictEqual(p.$('#ipc-status').textContent, '已关闭');
+  p.close();
+});
+
+test('拨动 IPC 开关 → 发 set-setting 意图（改配置的活在 tool 侧）', () => {
+  const p = mountPanel();
+  const toggle = p.$('#ipc-toggle');
+  toggle.checked = false;
+  toggle.dispatchEvent(new p.dom.window.Event('change'));
+  const intents = p.emitted.filter((e) => e.name === 'agent-status:set-setting');
+  assert.strictEqual(intents.length, 1);
+  // 载荷对象诞生在 jsdom realm，deepStrictEqual 会因原型不同挂掉 —— 逐字段断言
+  assert.strictEqual(intents[0].data.key, 'codexIpcEnabled');
+  assert.strictEqual(intents[0].data.value, false);
+  p.close();
+});
+
+test('设置视图的钩子按钮走同一批接入意图事件，接入态随 install-state 翻面', () => {
+  const p = mountPanel();
+  p.$('#gear').dispatchEvent(new p.dom.window.Event('click'));
+  // 未接入：两厂牌都显接入按钮
+  p.push('agent-status:install-state', { claude: false, codex: false });
+  assert.strictEqual(p.$('#set-claude-install').hidden, false);
+  assert.strictEqual(p.$('#set-codex-install').hidden, false);
+  assert.strictEqual(p.$('#set-codex-trust').hidden, true, '没装不提 Trust');
+  p.$('#set-claude-install').dispatchEvent(new p.dom.window.Event('click'));
+  assert.ok(p.emitted.some((e) => e.name === 'agent-status:install-claude'), '设置里的接入按钮是死的');
+  // 已接入：翻成「已接入 ✓」+ 移除入口 + Codex Trust 提示
+  p.push('agent-status:install-state', { claude: true, codex: true });
+  assert.strictEqual(p.$('#set-claude-install').hidden, true);
+  assert.strictEqual(p.$('#set-claude-installed').hidden, false);
+  assert.strictEqual(p.$('#set-codex-remove').hidden, false);
+  assert.strictEqual(p.$('#set-codex-trust').hidden, false, '装了必须提 Trust（facts §hook trust）');
+  p.$('#set-codex-remove').dispatchEvent(new p.dom.window.Event('click'));
+  assert.ok(p.emitted.some((e) => e.name === 'agent-status:uninstall-codex'));
+  p.close();
+});
+
+test('App 任务行渲染：窗口形角标 + 可点（深链接入口）', () => {
+  const CID = '01a08a1d-4f63-7e30-af03-48ae77b414b5';
+  const snap = snapshotOf([rec({
+    sessionId: CID, agent: 'codex', form: 'app', cwd: '', project: 'Codex App',
+    tty: null, pid: null, state: 'running', lastEvent: 'ipc:queued-followups-changed',
+    source: 'ipc', threadId: CID, ts: T0
+  })], { canJump: () => false,
+    canJumpWithoutTty: (row) => require(path.join(ROOT, 'lib', 'codex-deeplink.js')).pickNavigator(row) != null });
+  const p = mountPanel();
+  p.push('agent-status:snapshot', snap);
+  const row = p.$('.row');
+  assert.ok(row, 'App 行没渲染');
+  assert.strictEqual(row.querySelector('.form-badge').dataset.form, 'app');
+  assert.ok(row.classList.contains('can-jump'), 'App 行该是可点态（深链接）');
+  row.dispatchEvent(new p.dom.window.Event('click'));
+  const jumps = p.emitted.filter((e) => e.name === 'agent-status:jump');
+  assert.strictEqual(jumps.length, 1);
+  assert.strictEqual(jumps[0].data.sessionId, CID);
+  p.close();
 });

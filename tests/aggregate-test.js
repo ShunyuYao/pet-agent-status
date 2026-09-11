@@ -583,3 +583,51 @@ test('waiting + done 同批：waiting 是主角，mixed 文案，动画仍播（
   assert.ok(bubbles[0][1].includes('pw'), 'waiting 的项目名是主角');
   assert.strictEqual(m.calls.filter((c) => c[0] === 'playAnim').length, 1, '批里有 done，动画照播');
 });
+
+// ---- 8. US-8：App following 同级优先 + App 行深链接入口 ----
+
+const APP_CID = '01a08a1d-4f63-7e30-af03-48ae77b414b5';
+
+test('focus 同级优先 following：两条 running，旧的被 App 跟随 → 它是 focus', () => {
+  const dir = tmp();
+  const snap = seed(dir, [
+    rec({ sessionId: 'r-new', agent: 'codex', state: 'running', ts: T0 - 1000, threadId: 'f0e1d2c3-0000-4000-8000-000000000001' }),
+    rec({ sessionId: 'r-followed', agent: 'codex', state: 'running', ts: T0 - 60 * 1000, threadId: APP_CID })
+  ]);
+  const { summary } = run(snap, { isFollowing: (row) => row.threadId === APP_CID });
+  assert.strictEqual(summary.focus.sessionId, 'r-followed', '同级里 following 该赢过更新的 ts');
+});
+
+test('following 不越级：盯着 running 也压不过 waiting', () => {
+  const dir = tmp();
+  const snap = seed(dir, [
+    rec({ sessionId: 'w', state: 'waiting', lastEvent: 'Notification', ts: T0 - 90 * 1000 }),
+    rec({ sessionId: 'r-followed', agent: 'codex', state: 'running', ts: T0 - 1000, threadId: APP_CID })
+  ]);
+  const { summary } = run(snap, { isFollowing: (row) => row.threadId === APP_CID });
+  assert.strictEqual(summary.focus.sessionId, 'w', 'waiting 恒最高优先，following 只在同级加权');
+});
+
+test('isFollowing 抛错不打死聚合（当没 following 处理）', () => {
+  const dir = tmp();
+  const snap = seed(dir, [rec({ sessionId: 'a', state: 'running', ts: T0 - 1000 })]);
+  const { summary } = run(snap, { isFollowing: () => { throw new Error('boom'); } });
+  assert.strictEqual(summary.focus.sessionId, 'a');
+});
+
+test('App 行（form app、无 tty、合法 threadId）canJump=true；threadId 非法则 false', () => {
+  const dir = tmp();
+  const snap = seed(dir, [
+    rec({ sessionId: APP_CID, agent: 'codex', form: 'app', cwd: '', project: 'Codex App',
+      tty: null, pid: null, state: 'running', lastEvent: 'ipc:queued-followups-changed',
+      source: 'ipc', threadId: APP_CID, ts: T0 - 1000 }),
+    rec({ sessionId: 'no-thread', agent: 'claude-code', tty: null, state: 'running', ts: T0 - 1000 })
+  ]);
+  const dl = require(path.join(__dirname, '..', 'lib', 'codex-deeplink.js'));
+  const { rows } = run(snap, { canJump: () => false, canJumpWithoutTty: (row) => dl.pickNavigator(row) != null });
+  const app = rows.find((r) => r.sessionId === APP_CID);
+  assert.strictEqual(app.form, 'app');
+  assert.strictEqual(app.canJump, true, 'App 行有合法 threadId 就该有深链接入口');
+  const bare = rows.find((r) => r.sessionId === 'no-thread');
+  assert.strictEqual(bare.canJump, false, '无 tty 无 threadId 不给假入口');
+});

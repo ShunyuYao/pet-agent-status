@@ -14,6 +14,7 @@ const { createPetLink } = require(path.join(LIB, 'pet-link.js'));
 const { createBadgeLink } = require(path.join(LIB, 'badge.js'));
 const deeplink = require(path.join(LIB, 'codex-deeplink.js'));
 const { createCodexIpc } = require(path.join(LIB, 'codex-ipc.js'));
+const { createCodexAppIngest } = require(path.join(LIB, 'codex-app-ingest.js'));
 const { createNodeI18n } = require(path.join(LIB, 'i18n.js'));
 const installer = require(path.join(LIB, 'claude-hooks-installer.js'));
 const codexInstaller = require(path.join(LIB, 'codex-hooks-installer.js'));
@@ -31,6 +32,13 @@ const UNINSTALL_CLAUDE_EVENT = 'agent-status:uninstall-claude'; // panel → too
 const INSTALL_CODEX_EVENT = 'agent-status:install-codex';       // panel → tool：Codex 接入意图
 const UNINSTALL_CODEX_EVENT = 'agent-status:uninstall-codex';   // panel → tool：Codex 移除意图
 const JUMP_EVENT = 'agent-status:jump';                         // panel → tool：跳回终端意图
+const SETTINGS_STATE_EVENT = 'agent-status:settings-state';     // tool → panel：设置视图状态
+const SET_SETTING_EVENT = 'agent-status:set-setting';           // panel → tool：改设置意图
+
+// 设置的唯一真相源：pet.storage 的这个键。**默认开**（没存过值 = true）；
+// 只有显式存过 false 才算关。刻意不用 manifest entry.settings —— 那份值只有宿主设置页
+// 能写、panel 写不了，两处开关必漂（同好友仓「判据只允许一处」教训）。
+const IPC_ENABLED_KEY = 'codexIpcEnabled';
 
 // 跳转失败的错误条挂多久。留到下一次跳转成功/超时为止，不能永远挂着 ——
 // 用户在别处修好终端后面板还红着，会以为坏了。
@@ -74,10 +82,15 @@ function createCollector(deps) {
   }
   const link = createPetLink({ playAnimGuard: d.playAnimGuard });
   const badgeLink = createBadgeLink();
-  // Codex App 实时增强（默认关，manifest 设置项 codexIpcEnabled）。
-  // 它只提供「App 正在跟随哪个会话」这一条增益信号；连不上/协议变了会自己停用，
+  // Codex App 实时增强（**默认开**，storage 键 IPC_ENABLED_KEY，panel 设置视图可关）。
+  // 两条增益：① App 任务摄入为状态文件（codex-app-ingest，映射表冻结在 PROTOCOL.md）；
+  // ② following 信号进 focus 同级优先。连不上/协议变了会自己停用，
   // 面板与 Hooks 通道完全不受影响（fixtures/codex-ipc-facts.md §7）。
+  // 工厂可注入：测试绝不碰真 socket（默认路径是真实 ~/.codex/ipc/ipc.sock）。
+  const ipcFactory = typeof d.createCodexIpc === 'function' ? d.createCodexIpc : createCodexIpc;
+  const ingest = createCodexAppIngest({ dir: d.dir, now });
   let codexIpc = null;
+  let ipcEnabled = null;   // 上次读到的开关值（null = 还没读过）
   // 缺省 undefined → installer 自己走 settingsPath()（即 PET_AS_CLAUDE_SETTINGS 覆盖）；
   // 测试注入临时文件，绝不碰真实 ~/.claude/settings.json
   const installOpts = d.settingsFile ? { settingsFile: d.settingsFile } : undefined;
@@ -126,20 +139,59 @@ function createCollector(deps) {
    * panel 点了某一行。查它的 tty → 生成脚本 → 执行；失败**不 throw 不静默**，
    * 错误文案存起来随下一次快照回推，面板在该行下方显示行内错误条（DESIGN.md）。
    */
-  // 按插件设置项开/关 IPC 增强。设置是运行时可改的，每轮 tick 都对一次成本极低（读内存值）。
-  async function syncCodexIpc(pet) {
-    let want = false;
+  // 读开关：storage 没存过值（undefined/null）= 默认开；只有显式 false 才关。
+  // storage 读挂了按「维持现状」处理（首轮现状 = 默认开）——读取抖动不该把连接抖没。
+  async function readIpcEnabled(pet) {
     try {
-      const values = (pet && pet.settings && typeof pet.settings.get === 'function') ? await pet.settings.get() : null;
-      want = !!(values && values.codexIpcEnabled);
-    } catch (_) { want = false; }   // 读不到设置就按关处理，绝不默认打开实验能力
+      if (pet && pet.storage && typeof pet.storage.get === 'function') {
+        const v = await pet.storage.get(IPC_ENABLED_KEY);
+        return v == null ? true : v !== false;
+      }
+    } catch (_) { /* 读不到走下面的兜底 */ }
+    return ipcEnabled == null ? true : ipcEnabled;
+  }
+
+  // 按开关开/关 IPC 增强。设置是运行时可改的，每轮 tick 都对一次。
+  async function syncCodexIpc(pet) {
+    const want = await readIpcEnabled(pet);
+    ipcEnabled = want;
     if (want && !codexIpc) {
-      codexIpc = createCodexIpc({ socketPath: d.codexIpcPath || defaultCodexIpcPath() });
+      codexIpc = ipcFactory({
+        socketPath: d.codexIpcPath || defaultCodexIpcPath(),
+        // 摄入回调落状态文件，下一轮 tick（≤2s）自然进快照/联动，不在回调里强推
+        onActivity: (id) => ingest.onActivity(id),
+        onReadState: (id, hasUnread) => ingest.onReadState(id, hasUnread),
+        // 连接状态变了立刻告诉设置视图（ready/disabled 的翻面不该等 tick）
+        onStatus: () => pushSettingsState(pet)
+      });
       codexIpc.start();
     } else if (!want && codexIpc) {
       codexIpc.stop();
       codexIpc = null;
     }
+  }
+
+  // 设置视图状态：开关值 + IPC 连接态（off = 开关关着没实例）
+  function pushSettingsState(pet) {
+    emit(pet, SETTINGS_STATE_EVENT, {
+      codexIpcEnabled: ipcEnabled == null ? true : ipcEnabled,
+      ipcState: codexIpc ? codexIpc.state : 'off'
+    });
+  }
+
+  // panel 设置视图发来的改设置意图。只认白名单键，storage 写失败不打死采集器。
+  async function handleSetSetting(pet, data) {
+    if (!data || data.key !== IPC_ENABLED_KEY) return;
+    const value = data.value !== false;
+    try {
+      if (pet && pet.storage && typeof pet.storage.set === 'function') {
+        await pet.storage.set(IPC_ENABLED_KEY, value);
+      }
+    } catch (_) { /* 存不下也先按用户意图切运行态，下轮读回真值自会纠偏 */ }
+    ipcEnabled = value;
+    if (value && !codexIpc) await syncCodexIpc(pet);
+    else if (!value && codexIpc) { codexIpc.stop(); codexIpc = null; }
+    pushSettingsState(pet);
   }
 
   function handleJump(pet, data) {
@@ -188,7 +240,12 @@ function createCollector(deps) {
       const result = aggregate(raw, {
         now: at, isPidAlive: alive, t,
         canJump: makeCanJump(at),          // 判定实现在 lib/terminal-jump.js，这里只注入
-        jumpErrors: activeJumpErrors(at)   // 上次跳转失败的行内错误条
+        // 无 tty 行（App 任务）的可点判定：唯一实现在 codex-deeplink#pickNavigator，
+        // aggregate 保持零厂牌特判，只吃注入
+        canJumpWithoutTty: (row) => deeplink.pickNavigator(row) != null,
+        jumpErrors: activeJumpErrors(at),  // 上次跳转失败的行内错误条
+        // App 正在跟随的会话在 focus 同级里优先（US-8；threadId 即 conversationId）
+        isFollowing: (row) => !!(codexIpc && row.threadId && codexIpc.isFollowing(row.threadId))
       });
       // locale 随快照下发，panel 据此选词表（契约仍是 {rows, summary}，locale 是附加字段）
       result.locale = locale;
@@ -198,6 +255,7 @@ function createCollector(deps) {
       // 之后才打开的面板永远等不到这条，空态会一直停在「一键接入」——
       // 哪怕钩子早就装好了。读一个小 JSON，2s 一次的开销可以忽略。
       pushInstallState(pet);
+      pushSettingsState(pet);   // 设置视图同理随开随关，每轮都给
       link.onSnapshot(result.rows, pet, { now: at, t });
       // 折叠徽标（宿主 pet.badge.*）：数据取自同一份 summary，协议零改动。
       // 不 await：徽标失败不该拖慢/打断本轮采集，内部已自带 try/catch 与降级。
@@ -252,6 +310,7 @@ function createCollector(deps) {
     subscribe(pet, INSTALL_CODEX_EVENT, () => handleInstallCodex(pet));
     subscribe(pet, UNINSTALL_CODEX_EVENT, () => handleUninstallCodex(pet));
     subscribe(pet, JUMP_EVENT, (data) => handleJump(pet, data));
+    subscribe(pet, SET_SETTING_EVENT, (data) => { void handleSetSetting(pet, data); });
     // 语言以 renderer 的 navigator.language 为准（tool 进程的 LANG 不代表界面语言，
     // 实测会把中文用户判成 en）。panel 首次发现分歧时报上来，这里换表并立即重推一轮。
     subscribe(pet, LOCALE_EVENT, (data) => {
@@ -281,9 +340,11 @@ function createCollector(deps) {
   return {
     start, stop, tick,
     handleInstall, handleUninstall, handleInstallCodex, handleUninstallCodex,
-    pushInstallState, handleJump,
+    pushInstallState, handleJump, handleSetSetting,
     get taskId() { return taskId; },
-    get lastSnapshot() { return lastSnapshot; }
+    get lastSnapshot() { return lastSnapshot; },
+    get ipcEnabled() { return ipcEnabled; },
+    get codexIpc() { return codexIpc; }
   };
 }
 
@@ -327,5 +388,6 @@ module.exports = {
   isPidAlive, TICK_MS,
   SNAPSHOT_EVENT, LOCALE_EVENT, INSTALL_STATE_EVENT, INSTALL_CLAUDE_EVENT, UNINSTALL_CLAUDE_EVENT,
   INSTALL_CODEX_EVENT, UNINSTALL_CODEX_EVENT,
-  JUMP_EVENT, JUMP_ERROR_TTL_MS
+  JUMP_EVENT, JUMP_ERROR_TTL_MS,
+  SETTINGS_STATE_EVENT, SET_SETTING_EVENT, IPC_ENABLED_KEY
 };
