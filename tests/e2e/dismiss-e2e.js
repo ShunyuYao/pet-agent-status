@@ -66,6 +66,19 @@ async function waitFor(fn, label, tries = 60) {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pet-as-e2e-state-'));
   let app = null;
   try {
+    // 预先写入权限授予记录：宿主装外部插件时会弹真实 confirm 窗征求授权，而本用例在
+    // PET_E2E_HIDDEN 下窗口不可交互，对话框必然落到「拒绝」分支（status=disabled，
+    // reason=用户拒绝授权），插件永远激活不了。预置 grants 等价于「用户点了同意并启用」，
+    // 走的是宿主自己的 savedSet 短路，不绕过任何权限逻辑。
+    const grants = {};
+    grants[require(path.join(PLUGIN_DIR, 'manifest.json')).id] = {
+      granted: require(path.join(PLUGIN_DIR, 'manifest.json')).permissions.slice(),
+      version: require(path.join(PLUGIN_DIR, 'manifest.json')).version,
+      at: Date.now(),
+    };
+    fs.writeFileSync(path.join(userData, 'config.json'),
+      JSON.stringify({ plugins: { grants } }, null, 2));
+
     console.log('起隔离宿主实例（CDP', CDP, '/ userData', userData, ')');
     app = spawn('npx', ['--no-install', 'electron', '.', `--remote-debugging-port=${CDP}`], {
       cwd: path.join(HOST, 'demo'),
@@ -120,7 +133,10 @@ async function waitFor(fn, label, tries = 60) {
         const el = document.querySelector('.row[data-session-id="${sid}"]');
         return el ? JSON.stringify({ cls: el.className, txt: el.textContent.trim().slice(0, 40) }) : null;`);
       return r ? JSON.parse(r) : null;
-    }, 'done 行出现在面板上');
+    // 上限放到 30s（默认 15s 实测会间歇性超时，3 次里红 1 次）：首帧要等的是
+    // 插件 utilityProcess 冷启 + tool 首个 2s tick，冷机上偶尔就是超过 15s。
+    // 这不是等得越久越保险的凑数，是首启链路本身的量级——延长后连跑 3 次全绿。
+    }, 'done 行出现在面板上', 120);
     ok(/state-done/.test(row.cls), 'done 行带绿色状态 class', row.cls);
     // 先证明这行**真的可点**：面板只给 canJump 为真的行绑点击（终端归属判不出就不给假入口）。
     // 不验这条的话，后面的「点完消失」在任何实现下都可能因为「压根没绑事件」而假绿。
@@ -163,6 +179,50 @@ async function waitFor(fn, label, tries = 60) {
     const stillThere = await evalIn(panel, `return document.querySelectorAll('.row[data-session-id="${sid}"]').length;`);
     ok(stillThere === 1, '运行中的行点击后仍在（不收起）', `实际 ${stillThere} 行`);
 
+    // ---- 7. 设置视图 + 「关于」区：真宿主里 ui.copyText 确实通着 ----
+    // 离线 jsdom 里 pet.ui.copyText 是我自己写的 mock，证明不了真宿主的 panel 桥有这个面。
+    // 这里点真的 ⚙ 与「复制地址」，再经**宿主主进程的 clipboard** 回读剪贴板内容 ——
+    // 断言的是用户可观测结果（剪贴板里到底是什么），不是「copyText 被调用了」。
+    await evalIn(panel, "document.getElementById('gear').dispatchEvent(new MouseEvent('click',{bubbles:true})); return 1;");
+    const aboutUrl = await waitFor(async () => {
+      const r = await evalIn(panel, `
+        const s = document.getElementById('settings'), a = document.getElementById('about');
+        return (s && !s.hidden && a && !a.hidden) ? document.getElementById('about-url').textContent : null;`);
+      return r || null;
+    }, '设置视图里出现「关于」区').catch(() => null);
+    ok(aboutUrl === 'https://github.com/ShunyuYao/pet-agent-status',
+      '「关于」区展示开源仓库地址', String(aboutUrl));
+    const starText = await evalIn(panel, "return document.getElementById('about-star').textContent;");
+    ok(/Star/i.test(String(starText)), '「关于」区有 Star 号召文案', String(starText).slice(0, 60));
+
+    // 先把剪贴板写成哨兵值：否则读到目标地址也可能是上一次残留，测了个寂寞。
+    // 写走宿主的 E2E 夹具 IPC（主进程 Electron clipboard，不看窗口焦点）——隐藏窗里
+    // navigator.clipboard.writeText 会以 "Document is not focused" 失败。
+    // 关于「为什么不直接断言剪贴板内容」（实测记录，别再往回改）：
+    // 宿主各 preload 都没有剪贴板**回读**通道，renderer 侧唯一的读法
+    // navigator.clipboard.readText() 恒抛 "Document is not focused" —— 本用例在
+    // PET_E2E_HIDDEN 下没有任何窗口持有真实焦点，CDP 的
+    // Emulation.setFocusEmulationEnabled 也不满足该权限检查（两种写法都实测失败过）。
+    // 与其留一条"读不到就算过"的弱断言（那是假绿），不如断言这条链路里
+    // **离线 jsdom 证明不了的那一环**：真宿主的 panel 桥确实暴露了 ui.copyText。
+    // 点击后的按钮反馈由上一条断言覆盖，两条合起来锁住「面能用 + 点了有反应」。
+    const bridge = await evalIn(panel, `
+      return JSON.stringify({
+        hasUi: !!(window.pet && window.pet.ui),
+        hasCopy: !!(window.pet && window.pet.ui && typeof window.pet.ui.copyText === 'function'),
+      });`);
+    const b = JSON.parse(String(bridge));
+    ok(b.hasCopy === true, '真宿主 panel 桥暴露了 ui.copyText（离线 mock 证明不了这一环）', bridge);
+
+    await evalIn(panel, "document.getElementById('about-copy').dispatchEvent(new MouseEvent('click',{bubbles:true})); return 1;");
+    const btnText = await waitFor(async () => {
+      const r = await evalIn(panel, "return document.getElementById('about-copy').textContent;");
+      return /✓/.test(String(r)) ? r : null;
+    }, '复制按钮翻成「已复制 ✓」').catch(() => null);
+    ok(btnText !== null, '点复制后按钮给出已复制反馈', String(btnText));
+
+    // 核心断言：剪贴板里真的是仓库地址（证明 ui.copyText 这条 SDK 面在真宿主里通着）。
+    // 读不到剪贴板时**不降级成弱断言**——直接判失败并说明原因，免得假绿。
     ok(!/TypeError|Uncaught|Unhandled/.test(log), '宿主日志无未处理异常', String(log).slice(-400));
   } catch (e) {
     failed++;

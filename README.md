@@ -6,6 +6,11 @@
 - 状态来源：Claude Code / Codex CLI 官方 hooks → 本机状态文件（协议见 `PROTOCOL.md`）
 - UI 规格：`DESIGN.md`（Figma 同源）
 - 安装：宿主设置页「插件 → 手动安装」选择本仓库目录（开发者模式），或等市场上架
+- 设置：宿主设置页「插件」里点本插件的**「打开面板」**，面板右上角 **⚙** 即插件设置
+  （Codex App 实时增强开关、Claude Code / Codex CLI 钩子接入、关于与开源地址）
+
+> 喜欢这个插件的话，欢迎去 GitHub 点个 ⭐️ Star：
+> <https://github.com/ShunyuYao/pet-agent-status>
 
 ## 权限披露（nodeAccess）
 

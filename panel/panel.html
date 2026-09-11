@@ -194,13 +194,36 @@ body{
 }
 .switch input:checked + .knob{background:var(--primary)}
 .switch input:checked + .knob::after{left:16px}
+/* ---- 关于 · 开源仓库（设置视图末尾） ----
+   宿主 SDK 没有 openExternal/shell 任何一条外开通道（sdk-surface.js 全 19 个 ns 里都没有），
+   panel 窗也没装 setWindowOpenHandler —— 所以 <a href> / target=_blank 点了**什么都不会发生**。
+   唯一能把地址交到用户手里的合规通道是 ui.copyText（FROZEN 档）。因此这里刻意不做成链接样式：
+   做成链接却打不开是假入口，比一个诚实的「复制地址」按钮更糟。 */
+.about{background:var(--row-bg);border-radius:12px;padding:10px}
+.about-star{margin-top:6px;font-size:11px;color:var(--gray);line-height:1.6}
+.about-repo{
+  margin-top:8px;display:flex;align-items:center;gap:8px;
+  font-family:"Inter",ui-monospace,monospace;font-size:10.5px;color:var(--gray);
+  word-break:break-all;
+}
+.about-copy{
+  flex:0 0 auto;background:none;border:1px solid rgba(255,255,255,.18);border-radius:8px;
+  padding:4px 10px;font-size:11px;font-family:inherit;color:#fff;cursor:pointer;
+}
+.about-copy:hover{border-color:var(--primary);color:var(--primary)}
+.about-copy.is-done{border-color:var(--success);color:var(--success)}
 [hidden]{display:none !important}
 </style>
 </head>
 <body>
   <div class="topbar">
     <span class="title" id="title"></span>
+    <!-- 汇总胶囊的子节点由 JS 按状态动态建（0.7.1「done 进汇总」起，可能渲染两段），
+         这里刻意留空 —— 别改回写死的 dot+text 两个 span。 -->
     <span class="summary" id="summary" hidden></span>
+    <!-- 设置入口。宿主的插件设置页对第三方插件不给「设置」按钮（PluginDetailPage 的详情页
+         是内建插件白名单），所以这个 ⚙ 是本插件设置的**唯一**入口 —— 必须有 title/aria
+         让人找得到，不能只是个光秃秃的字符。 -->
     <button class="gear" id="gear" type="button">⚙</button>
     <button class="close" id="close" type="button">✕</button>
   </div>
@@ -236,6 +259,14 @@ body{
         <button class="set-btn is-remove" id="set-codex-remove" type="button" hidden></button>
       </div>
       <div class="codex-trust" id="set-codex-trust" hidden></div>
+    </div>
+    <div class="about" id="about">
+      <div class="set-label" id="about-label"></div>
+      <div class="about-star" id="about-star"></div>
+      <div class="about-repo">
+        <span id="about-url"></span>
+        <button class="about-copy" id="about-copy" type="button"></button>
+      </div>
     </div>
   </div>
 
@@ -312,7 +343,11 @@ body{
       'settings.hooks.installed': '已接入 ✓',
       'settings.hooks.notInstalled': '未接入',
       'settings.hooks.install': '一键接入',
-      'settings.hooks.remove': '移除钩子'
+      'settings.hooks.remove': '移除钩子',
+      'about.title': '关于这个插件',
+      'about.star': '本插件开源。如果它帮到了你，欢迎去 GitHub 点个 Star ⭐️ —— 这是对作者最大的鼓励。',
+      'about.copy': '复制地址',
+      'about.copied': '已复制 ✓'
     },
     en: {
       'panel.title': 'Agent Sessions',
@@ -343,7 +378,11 @@ body{
       'settings.hooks.installed': 'Installed ✓',
       'settings.hooks.notInstalled': 'Not installed',
       'settings.hooks.install': 'Install',
-      'settings.hooks.remove': 'Remove hooks'
+      'settings.hooks.remove': 'Remove hooks',
+      'about.title': 'About this plugin',
+      'about.star': "This plugin is open source. If it helps you, please star it on GitHub ⭐️ — it means a lot.",
+      'about.copy': 'Copy link',
+      'about.copied': 'Copied ✓'
     }
   };
   // 与 lib/i18n.js 同一套策略：只区分中/英两档，取不到词就把 key 显出来（一眼看得出漏词）。
@@ -386,6 +425,10 @@ body{
   var elIpcStatus = $('ipc-status');
   var settingsOpen = false;
   var ipcState = 'off';
+  // 开源仓库地址。写死在这里而不是读 manifest：panel 上下文没有 fs，也没有读自身 manifest 的
+  // SDK 面；这个值同时出现在 README 与 package.json.repository，改地址时三处一起改。
+  var REPO_URL = 'https://github.com/ShunyuYao/pet-agent-status';
+  var copiedUntil = 0;   // 「已复制 ✓」回落时刻，见 paintStatic 里的守卫
   elIpcToggle.checked = true;   // 默认开（tool 的 settings-state 一到以它为准）
 
   // ---- 与 tool 侧通信：只经 pet.events（AGENTS.md 插件形态红线） ----
@@ -430,6 +473,13 @@ body{
     $('set-claude-remove').textContent = t('settings.hooks.remove');
     $('set-codex-remove').textContent = t('settings.hooks.remove');
     $('set-codex-trust').textContent = t('empty.codexTrust');
+    elGear.title = t('settings.title');
+    elGear.setAttribute('aria-label', t('settings.title'));
+    $('about-label').textContent = t('about.title');
+    $('about-star').textContent = t('about.star');
+    $('about-url').textContent = REPO_URL;
+    // 复制成功后按钮会停在「已复制 ✓」两秒；那期间重刷静态文案（切语言）不该把它打回去
+    if (!copiedUntil || Date.now() > copiedUntil) $('about-copy').textContent = t('about.copy');
     paintIpcStatus();
   }
   paintStatic();
@@ -449,6 +499,23 @@ body{
   $('set-claude-remove').addEventListener('click', function () { emit(EV_UNINSTALL_CLAUDE, {}); });
   $('set-codex-install').addEventListener('click', function () { emit(EV_INSTALL_CODEX, {}); });
   $('set-codex-remove').addEventListener('click', function () { emit(EV_UNINSTALL_CODEX, {}); });
+  // 复制仓库地址：ui.copyText 是 panel 上下文唯一能把地址交到用户手里的通道（见 .about 样式注释）。
+  // 失败不静默 —— 按钮停在原文案，用户至少看得见地址本身，可以手抄。
+  $('about-copy').addEventListener('click', function () {
+    var okCopy = false;
+    try {
+      if (pet.ui && typeof pet.ui.copyText === 'function') { pet.ui.copyText(REPO_URL); okCopy = true; }
+    } catch (e) { okCopy = false; }
+    if (!okCopy) return;
+    copiedUntil = Date.now() + 2000;
+    $('about-copy').textContent = t('about.copied');
+    $('about-copy').classList.add('is-done');
+    setTimeout(function () {
+      copiedUntil = 0;
+      $('about-copy').textContent = t('about.copy');
+      $('about-copy').classList.remove('is-done');
+    }, 2000);
+  });
   elGear.addEventListener('click', function () {
     settingsOpen = !settingsOpen;
     $('title').textContent = settingsOpen ? t('settings.title') : t('panel.title');
