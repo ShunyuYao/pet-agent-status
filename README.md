@@ -16,7 +16,7 @@
 | `fs` 读写 `~/.local/state/pet-agent-status/` | 读取会话状态文件（本插件 hooks 自己写入的数据） | 仅该目录 |
 | `fs` 读写 `~/.claude/settings.json`、`~/.codex/hooks.json` | 「一键接入/移除钩子」时合并写入 hooks 条目，写前自动备份 | 仅接入/卸载动作时；不碰 Codex 的 `hooks.state` 信任文件 |
 | `child_process` spawn `ps` | 按会话的 tty 反查它属于哪个终端 App（决定这一行能否跳转） | 只读进程表，10 秒缓存 |
-| `child_process` spawn `osascript` | 点击会话行时聚焦 iTerm2 / Terminal.app 对应窗口标签页 | 仅跳转动作时 |
+| `child_process` spawn `osascript` | ① 点击会话行时聚焦 iTerm2 / Terminal.app 对应窗口标签页；② 读取终端标签标题做会话名（Claude Code 把 AI 生成的标题推给了终端，磁盘上没有） | ① 仅跳转动作时；② 15s 缓存的只读查询，仅查已在运行的终端（不拉起 App），与跳转同一份自动化授权 |
 | `child_process` spawn `open` | 点击 Codex App 任务时经 `codex://threads/<id>` 深链接跳转 | 仅跳转动作时 |
 | `net` 连接 `~/.codex/ipc/ipc.sock` | Codex App 实时增强（**默认开，面板设置里可关**）：只读监听任务动态与跟随状态 | 开关打开时（默认）；故障自动停用 |
 | `fs`/`node:sqlite` **只读** `~/.codex/sqlite/codex-dev.db`、`~/.codex/session_index.jsonl` | 会话行显示 Codex 自己生成的线程标题 | 只读，30s 缓存；读不到自动降级为目录名 |

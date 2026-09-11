@@ -16,6 +16,7 @@ const deeplink = require(path.join(LIB, 'codex-deeplink.js'));
 const { createCodexIpc } = require(path.join(LIB, 'codex-ipc.js'));
 const { createCodexAppIngest } = require(path.join(LIB, 'codex-app-ingest.js'));
 const { createCodexThreadTitles } = require(path.join(LIB, 'codex-thread-titles.js'));
+const { createTerminalTitles } = require(path.join(LIB, 'terminal-titles.js'));
 const { createNodeI18n } = require(path.join(LIB, 'i18n.js'));
 const installer = require(path.join(LIB, 'claude-hooks-installer.js'));
 const codexInstaller = require(path.join(LIB, 'codex-hooks-installer.js'));
@@ -93,6 +94,10 @@ function createCollector(deps) {
   // 会话标题解析（US-9）：Codex 线程目录里 AI 生成的标题按 threadId 查（App 与 CLI 共库，
   // fixtures/codex-ipc-facts.md §9）。可注入：测试绝不读真实 ~/.codex（默认走 CODEX_HOME）。
   const threadTitles = d.threadTitles || createCodexThreadTitles({ codexHome: d.codexHome, now });
+  // 终端标签标题（US-9 增强）：Claude Code 把 AI 标题推给了终端（磁盘上没有），
+  // 按 tty 从 iTerm2/Terminal.app 查回来（fixtures/terminal-titles-facts.md）。
+  // 可注入：测试绝不 spawn 真 osascript（会触发自动化授权弹窗/拉起终端查询）。
+  const termTitles = d.terminalTitles || createTerminalTitles({ now });
   let codexIpc = null;
   let ipcEnabled = null;   // 上次读到的开关值（null = 还没读过）
   // 缺省 undefined → installer 自己走 settingsPath()（即 PET_AS_CLAUDE_SETTINGS 覆盖）；
@@ -250,9 +255,16 @@ function createCollector(deps) {
         jumpErrors: activeJumpErrors(at),  // 上次跳转失败的行内错误条
         // App 正在跟随的会话在 focus 同级里优先（US-8；threadId 即 conversationId）
         isFollowing: (row) => !!(codexIpc && row.threadId && codexIpc.isFollowing(row.threadId)),
-        // 会话标题：Codex 行按 threadId 查线程目录里 AI 生成的名字（唯一实现在
-        // lib/codex-thread-titles.js）；查不到 aggregate 回落落盘兜底标题 → project
-        titleFor: (rec) => (rec.agent === 'codex' && rec.threadId ? threadTitles.lookup(rec.threadId) : null)
+        // 会话标题优先级（facts §4）：Codex 线程目录 AI 标题 > 终端标签标题 >
+        // （aggregate 回落）落盘 title（首条 prompt 首行）> project。
+        // 两个解析器各自唯一实现在 lib/codex-thread-titles.js / lib/terminal-titles.js。
+        titleFor: (rec) => {
+          if (rec.agent === 'codex' && rec.threadId) {
+            const fromCatalog = threadTitles.lookup(rec.threadId);
+            if (fromCatalog) return fromCatalog;
+          }
+          return rec.tty ? termTitles.lookup(rec.tty) : null;
+        }
       });
       // locale 随快照下发，panel 据此选词表（契约仍是 {rows, summary}，locale 是附加字段）
       result.locale = locale;

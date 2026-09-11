@@ -131,7 +131,8 @@ function collectorOn(dir, over) {
     createCodexIpc: fakeIpcFactory().factory,
     // 标题解析器必须注入：默认实现会读真实 ~/.codex 线程目录（隔离红线），
     // 且本套件的 App 行用的是实录 conversationId——在维护者机器上真能查到标题
-    threadTitles: { lookup: () => null }
+    threadTitles: { lookup: () => null },
+    terminalTitles: { lookup: () => null }   // 同理：默认实现 spawn osascript 查真实终端
   }, over));
 }
 
@@ -566,25 +567,29 @@ const GUARD_BEFORE = guardSnapshot(GUARD_PATHS);
     await c.stop(m.pet);
   });
 
-  await test('US-9 标题接线：codex 行按 threadId 走注入解析器，快照行带解析出的标题', async () => {
+  await test('US-9 标题接线与优先级：codex 线程库 > 终端标签 > 落盘兜底', async () => {
     const dir = tmp();
     const m = mockPet();
     const asked = [];
+    const TID = '01a08a1d-4f63-7e30-af03-48ae77b414b5';
     const c = collectorOn(dir, {
-      threadTitles: { lookup: (id) => { asked.push(id); return id === '01a08a1d-4f63-7e30-af03-48ae77b414b5' ? '查找 Codex 宠物多会话管理' : null; } }
+      threadTitles: { lookup: (id) => { asked.push(id); return id === TID ? '查找 Codex 宠物多会话管理' : null; } },
+      // 终端标签标题（facts：iTerm/Terminal 按 tty 查回），三行 tty 各有归属
+      terminalTitles: { lookup: (tty) => ({ '/dev/ttys017': '终端里的 AI 标题', '/dev/ttys022': '终端兜底名' }[tty] || null) }
     });
-    sf.writeStatus(rec({
-      sessionId: '01a08a1d-4f63-7e30-af03-48ae77b414b5', agent: 'codex',
-      threadId: '01a08a1d-4f63-7e30-af03-48ae77b414b5', title: '兜底名', state: 'running', ts: T0
-    }), dir);
-    sf.writeStatus(rec({ sessionId: 'cc', agent: 'claude-code', title: '首条 prompt 名', ts: T0 }), dir);
+    // codex 行：线程库命中 → 终端标签（ttys022 也有）必须让位
+    sf.writeStatus(rec({ sessionId: TID, agent: 'codex', threadId: TID, tty: '/dev/ttys022', title: '兜底名', ts: T0 }), dir);
+    // claude 行：磁盘上没有 AI 标题，终端标签就是用户看到的那个名字，压过落盘首条 prompt
+    sf.writeStatus(rec({ sessionId: 'cc', agent: 'claude-code', tty: '/dev/ttys017', title: '首条 prompt 名', ts: T0 }), dir);
+    // claude 行无 tty：只能用落盘兜底
+    sf.writeStatus(rec({ sessionId: 'cc2', agent: 'claude-code', tty: null, title: '无终端兜底', ts: T0 }), dir);
     await c.start(m.pet);
     const rows = m.state.snapshots()[0].data.rows;
-    const cx = rows.find((r) => r.sessionId !== 'cc');
-    const cl = rows.find((r) => r.sessionId === 'cc');
-    assert.strictEqual(cx.title, '查找 Codex 宠物多会话管理', '解析器标题没进快照');
-    assert.strictEqual(cl.title, '首条 prompt 名', 'claude 行用落盘兜底标题');
-    assert.ok(!asked.includes(undefined) && !asked.some((id) => id == null), '无 threadId 的行不该问解析器');
+    const by = Object.fromEntries(rows.map((r) => [r.sessionId, r]));
+    assert.strictEqual(by[TID].title, '查找 Codex 宠物多会话管理', '线程库标题必须压过终端标签');
+    assert.strictEqual(by.cc.title, '终端里的 AI 标题', 'claude 行应显示终端标签标题');
+    assert.strictEqual(by.cc2.title, '无终端兜底', '无 tty 行回落落盘标题');
+    assert.ok(!asked.some((id) => id == null), '无 threadId 的行不该问线程库解析器');
     await c.stop(m.pet);
   });
 

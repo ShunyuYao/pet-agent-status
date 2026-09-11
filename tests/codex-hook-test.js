@@ -698,6 +698,7 @@ test('端到端：codex hook 写入 → tool 采集 → panel 渲染出 codex �
     // 标题解析器注入空实现：默认实现会读真实 ~/.codex 线程目录（隔离红线），
     // 且实录夹具的 threadId 在维护者机器上真能查到标题，会让断言依赖本机数据
     threadTitles: { lookup: () => null },
+    terminalTitles: { lookup: () => null },
     settingsFile: path.join(tmp(), 'settings.json'),
     codexHooksFile: hooksFileIn(tmp()),
     psTree: [
@@ -773,6 +774,7 @@ test('端到端：带 tty 的 codex 行点击 → tool 真的尝试跳转，失�
   const collector = tool.createCollector({
     dir, now: () => T0, isPidAlive: () => true, locale: 'zh-CN',
     threadTitles: { lookup: () => null },   // 隔离：默认实现读真实 ~/.codex
+    terminalTitles: { lookup: () => null },   // 隔离：默认实现 spawn osascript 查真实终端
     settingsFile: path.join(tmp(), 'settings.json'),
     codexHooksFile: hooksFileIn(tmp()),
     psTree: [
@@ -826,6 +828,7 @@ test('端到端：点 Codex 接入 → tool 真写临时 hooks.json → 面板�
   const collector = tool.createCollector({
     dir: tmp(), now: () => T0, isPidAlive: () => true, locale: 'zh-CN',
     threadTitles: { lookup: () => null },   // 隔离：默认实现读真实 ~/.codex
+    terminalTitles: { lookup: () => null },   // 隔离：默认实现 spawn osascript 查真实终端
     settingsFile: path.join(tmp(), 'settings.json'),
     codexHooksFile: codexFile,
     psTree: []

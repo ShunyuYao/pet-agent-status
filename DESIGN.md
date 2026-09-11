@@ -29,8 +29,9 @@
   1. **agent 徽标 26×26 圆角 8**：厂牌看主图标（Claude=陶土底白色官方星标 SVG；Codex=黑底白色
      OpenAI 官方结标 SVG，打包本地 SVG 资源，不引用远程）；**右下角 13×13 形态角标**：
      `>_`（CLI 终端会话）/ 窗口形（Codex App 任务，二期）。
-  2. 中列：会话标题（白 13；US-9：Codex 线程 AI 标题 > 首条 prompt 首行 > 项目目录名兜底，
-     有标题时目录名转 tooltip）+ 状态副行（11，颜色随状态：running 浅蓝/waiting 橙/done 绿/error 红/idle 灰）。
+  2. 中列：会话标题（白 13；US-9：Codex 线程 AI 标题 > 终端标签标题（Claude Code 的
+     AI 标题只在终端里，见 fixtures/terminal-titles-facts.md）> 首条 prompt 首行 >
+     项目目录名兜底，有标题时目录名转 tooltip）+ 状态副行（11，颜色随状态：running 浅蓝/waiting 橙/done 绿/error 红/idle 灰）。
   3. 右列：状态点 8px + 相对时间（运行中显 `mm:ss` 计时，完成显 `N 分前`）。
 - **聚焦会话标记**（2026-09-10 增补，对齐 Codex Pets「following」）：快照 `summary.focus` 指向注意力
   优先级最高的一行（waiting > running > error > done，同级取最新；每行带布尔 `focused`），该行左缘
