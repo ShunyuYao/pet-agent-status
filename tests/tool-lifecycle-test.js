@@ -460,7 +460,8 @@ const GUARD_BEFORE = guardSnapshot(GUARD_PATHS);
     // badge 自 0.3.0 起使用（宿主 0.19.0 的 pet.badge.*，experimental 档）。
     // 这份白名单是 AGENTS.md 插件形态红线的守卫：新增 SDK 面必须**同时**更新它与 README
     // 的能力披露，不许靠放宽断言蒙混——它刚刚真的拦下了一次未登记的新面。
-    const allowed = new Set(['scheduler', 'events', 'pet', 'badge']);
+    // settings 自 0.4.0 起使用（读 codexIpcEnabled 开关）。新增 SDK 面必须同时更新本白名单与 README。
+    const allowed = new Set(['scheduler', 'events', 'pet', 'badge', 'settings']);
     for (const ns of touched) {
       assert.ok(allowed.has(ns), `碰了未披露的 SDK 面 pet.${ns}（AGENTS.md 插件形态红线）`);
     }

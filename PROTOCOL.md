@@ -67,6 +67,16 @@ Codex 侧附加约定：
 - `idle`：done/ended 超 5min 驻留窗，或任何状态 `ts` 距今 > 20min；idle 超 20min 从面板移除。
 - `unknown`：文件损坏/schema 高于当前支持版本/来源语义不明。**绝不映射为 done**。
 
+## Codex App 来源（US-8，source:'ipc'）
+
+App 任务与 CLI 会话在协议上同构，只有两处差别：
+- `tty` 为 null（App 任务没有终端），`threadId` 必填且为 UUID —— 跳转据此走深链接而非 tty 聚焦
+  （判定唯一实现在 `lib/codex-deeplink.js#pickNavigator`）。
+- `source: 'ipc'` 标明来自实时增强通道；`'hook'` 仍是 CLI 主通道。
+
+IPC 只作为**增益信号**（当前仅「App 正在跟随哪个会话」），不作为会话存在性的唯一来源：
+未实录确认语义的事件一律忽略，**绝不映射成 done**（见 `fixtures/codex-ipc-facts.md` §5）。
+
 ## 路径覆盖约定（测试隔离）
 
 | 环境变量 | 覆盖对象 | 默认 |
@@ -74,3 +84,4 @@ Codex 侧附加约定：
 | `PET_AGENT_STATUS_DIR` | 状态目录 | `~/.local/state/pet-agent-status` |
 | `PET_AS_CLAUDE_SETTINGS` | Claude Code 配置 | `~/.claude/settings.json` |
 | `PET_AS_CODEX_HOOKS` | Codex CLI hooks 配置 | `$CODEX_HOME/hooks.json`，`CODEX_HOME` 缺省 `~/.codex` |
+| `CODEX_HOME` | Codex 主目录（hooks 配置与 IPC socket 同源认它） | `~/.codex` |

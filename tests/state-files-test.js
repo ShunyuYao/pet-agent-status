@@ -247,7 +247,8 @@ test('manifest.json 符合宿主 loadManifest 的校验规则', () => {
 
   const KINDS = ['tool', 'panel', 'asset', 'skill', 'settings', 'service', 'dashboard-card'];
   assert.ok(Array.isArray(m.kind) && m.kind.length && m.kind.every((k) => KINDS.includes(k)));
-  assert.deepStrictEqual(m.kind, ['tool', 'panel']);
+  // settings 自 0.4.0 起加入：Codex App 实时增强的开关（manifest entry.settings）
+  assert.deepStrictEqual(m.kind, ['tool', 'panel', 'settings']);
 
   assert.deepStrictEqual(m.permissions, ['storage', 'pet', 'ui', 'events', 'scheduler']);
 

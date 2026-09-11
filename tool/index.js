@@ -5,12 +5,15 @@
 // 合规通道：manifest 声明的 pet.{scheduler,events,pet} + 状态目录读写（README 权限披露）。
 
 const path = require('path');
+const os = require('os');
 
 const LIB = path.join(__dirname, '..', 'lib');
 const stateFiles = require(path.join(LIB, 'state-files.js'));
 const { aggregate } = require(path.join(LIB, 'aggregate.js'));
 const { createPetLink } = require(path.join(LIB, 'pet-link.js'));
 const { createBadgeLink } = require(path.join(LIB, 'badge.js'));
+const deeplink = require(path.join(LIB, 'codex-deeplink.js'));
+const { createCodexIpc } = require(path.join(LIB, 'codex-ipc.js'));
 const { createNodeI18n } = require(path.join(LIB, 'i18n.js'));
 const installer = require(path.join(LIB, 'claude-hooks-installer.js'));
 const codexInstaller = require(path.join(LIB, 'codex-hooks-installer.js'));
@@ -44,6 +47,13 @@ function isPidAlive(pid) {
  * 造一个采集器。所有外部依赖可注入，测试不碰真实目录/时钟/进程。
  * @param {object} [deps] { dir, now, isPidAlive, t, playAnimGuard, readSnapshots }
  */
+// Codex IPC socket 默认路径。与 hooks 配置同源认 CODEX_HOME（fixtures/codex-ipc-facts.md §1），
+// 可经 deps.codexIpcPath 覆盖（测试注入假路径，绝不碰真 socket）。
+function defaultCodexIpcPath() {
+  const home = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+  return path.join(home, 'ipc', 'ipc.sock');
+}
+
 function createCollector(deps) {
   const d = deps || {};
   const readSnapshots = typeof d.readSnapshots === 'function' ? d.readSnapshots : stateFiles.readSnapshots;
@@ -57,6 +67,10 @@ function createCollector(deps) {
   const locale = d.locale || i18n.locale;
   const link = createPetLink({ playAnimGuard: d.playAnimGuard });
   const badgeLink = createBadgeLink();
+  // Codex App 实时增强（默认关，manifest 设置项 codexIpcEnabled）。
+  // 它只提供「App 正在跟随哪个会话」这一条增益信号；连不上/协议变了会自己停用，
+  // 面板与 Hooks 通道完全不受影响（fixtures/codex-ipc-facts.md §7）。
+  let codexIpc = null;
   // 缺省 undefined → installer 自己走 settingsPath()（即 PET_AS_CLAUDE_SETTINGS 覆盖）；
   // 测试注入临时文件，绝不碰真实 ~/.claude/settings.json
   const installOpts = d.settingsFile ? { settingsFile: d.settingsFile } : undefined;
@@ -105,14 +119,38 @@ function createCollector(deps) {
    * panel 点了某一行。查它的 tty → 生成脚本 → 执行；失败**不 throw 不静默**，
    * 错误文案存起来随下一次快照回推，面板在该行下方显示行内错误条（DESIGN.md）。
    */
+  // 按插件设置项开/关 IPC 增强。设置是运行时可改的，每轮 tick 都对一次成本极低（读内存值）。
+  async function syncCodexIpc(pet) {
+    let want = false;
+    try {
+      const values = (pet && pet.settings && typeof pet.settings.get === 'function') ? await pet.settings.get() : null;
+      want = !!(values && values.codexIpcEnabled);
+    } catch (_) { want = false; }   // 读不到设置就按关处理，绝不默认打开实验能力
+    if (want && !codexIpc) {
+      codexIpc = createCodexIpc({ socketPath: d.codexIpcPath || defaultCodexIpcPath() });
+      codexIpc.start();
+    } else if (!want && codexIpc) {
+      codexIpc.stop();
+      codexIpc = null;
+    }
+  }
+
   function handleJump(pet, data) {
     const at = now();
     const sessionId = data && data.sessionId;
     if (!sessionId) return { ok: false, reason: 'unavailable' };
     const row = lastSnapshot.rows.find((r) => r.sessionId === sessionId);
+    // 两条并列的导航路（判定唯一实现在 lib/codex-deeplink.js#pickNavigator）：
+    // Codex App 任务没有 tty、只有 threadId，只能走深链接；其余（含所有 CLI 会话）走 tty 聚焦。
+    const nav = deeplink.pickNavigator(row);
     let result;
-    if (!row || row.tty == null) {
+    if (!nav) {
       result = { ok: false, reason: 'unavailable' };
+    } else if (nav.kind === 'deeplink') {
+      const r = deeplink.openDeepLink(nav.url, d.execFile);
+      // `open` 受理 ≠ 页面真的呈现（fixtures/codex-ipc-facts.md §6）——这里只能报「已发起」。
+      // Scheme 没注册（没装 Codex App）与一般失败文案不同，故 reason 分开传。
+      result = r.ok ? { ok: true } : { ok: false, reason: r.reason === 'no-scheme' ? 'no-codex-app' : 'failed' };
     } else {
       result = terminalJump.runJump(row.tty, { psTree: psTreeCached(at), runner: jumpRunner });
     }
@@ -121,9 +159,13 @@ function createCollector(deps) {
     } else {
       // reason==='unavailable' 是「压根找不到终端」，与「osascript 报错」文案不同：
       // 前者用户该去别处找会话，后者是这次执行挂了，可以再试。
+      // 三档文案各有各的行动指引：找不到终端（去别处找会话）/ 没装 Codex App（去装或启动）/
+      // 这次执行挂了（可以再试）。塞进同一句「失败：<reason>」会把内部枚举名甩给用户。
       const text = result.reason === 'unavailable'
         ? t('jump.unavailable')
-        : t('jump.failed', { reason: result.reason });
+        : result.reason === 'no-codex-app'
+          ? t('jump.noCodexApp')
+          : t('jump.failed', { reason: result.reason });
       jumpErrors.set(sessionId, { text, at });
     }
     // 立刻回推一轮，用户点完当场看到结果，不用等下一个 tick
@@ -153,6 +195,7 @@ function createCollector(deps) {
       // 折叠徽标（宿主 pet.badge.*）：数据取自同一份 summary，协议零改动。
       // 不 await：徽标失败不该拖慢/打断本轮采集，内部已自带 try/catch 与降级。
       void badgeLink.onSummary(result.summary, pet);
+      void syncCodexIpc(pet);   // 设置项运行时可改：开了要连上、关了要断开
       return result;
     } catch (_) {
       return lastSnapshot;   // 本轮读坏了就沿用上轮，面板不闪空
@@ -204,6 +247,7 @@ function createCollector(deps) {
     subscribe(pet, JUMP_EVENT, (data) => handleJump(pet, data));
     // 必须 await：pet.scheduler.every 返回的是 Promise<taskId>，
     // 直接存 Promise 会让 cancel 拿到个对象、恒 miss，旧定时器永不回收（宿主已知坑）。
+    await syncCodexIpc(pet);
     taskId = await pet.scheduler.every(TICK_MS, () => tick(pet));
     tick(pet);   // 立刻来一轮，用户开面板不用等 2 秒
     return taskId;
@@ -216,6 +260,7 @@ function createCollector(deps) {
     try { await pet.scheduler.cancel(id); } catch (_) { /* 宿主已经收走了 */ }
     // 正常停用时自己把徽标撤干净（宿主虽有兜底清除，但那是给异常路径的）
     await badgeLink.dispose(pet);
+    if (codexIpc) { codexIpc.stop(); codexIpc = null; }
   }
 
   return {
