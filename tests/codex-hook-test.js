@@ -88,30 +88,29 @@ function readOnly(dir) {
 // ================================================================
 // 0. 前置门：facts 文件与实录夹具在位
 // ================================================================
-// 隔离自证的判据是「本轮没有新增/改动这些真实路径」，不是「它们不存在」——
-// 插件被真实使用后状态目录与备份文件必然存在（2026-09-10 在用户机器上误报过）。
-function guardSnapshot(paths) {
-  return paths.map((p) => {
-    if (!fs.existsSync(p)) return `${p}@absent`;
-    let st;
-    try { st = fs.statSync(p); } catch (_) { return `${p}@gone`; }
-    if (st.isDirectory()) {
-      const names = fs.readdirSync(p).sort().map((n) => {
-        let m = 0;
-        try { m = fs.statSync(path.join(p, n)).mtimeMs; } catch (_) { /* 竞态 */ }
-        return `${n}:${m}`;
-      });
-      return `${p}@dir[${names.join(',')}]`;
-    }
-    return `${p}@file:${st.mtimeMs}`;
-  });
+// 隔离自证：测试**自己的数据**不得出现在真实路径里。
+//
+// ⚠️ 判据不能是「真实目录一个字节都没变」（2026-09-11 实测教训）：维护者自己也在用这个插件，
+// 开发机上真实 agent 会话会持续写状态目录，mtime 快照必然变化 —— 那个守卫在开发机上随机变红，
+// 且红了也说明不了问题。真正要防的是**测试数据泄漏进真实目录**，所以改为按测试专属前缀检查。
+// 所有测试造的 sessionId 一律带 TEST_ID_PREFIX，泄漏时一抓一个准。
+const TEST_ID_PREFIX = 'pet-as-test-';
+function realStateDir() {
+  return path.join(os.homedir(), '.local', 'state', 'pet-agent-status');
 }
-const GUARD_PATHS = [
-  path.join(os.homedir(), '.local', 'state', 'pet-agent-status'),
-  path.join(os.homedir(), '.claude', 'settings.json.bak-pet-agent-status'),
-  path.join(os.homedir(), '.codex', 'hooks.json.bak-pet-agent-status')
-];
-const GUARD_BEFORE = guardSnapshot(GUARD_PATHS);
+function leakedTestFiles() {
+  const dir = realStateDir();
+  if (!fs.existsSync(dir)) return [];
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch (_) { return []; }
+  return names.filter((n) => n.includes(TEST_ID_PREFIX));
+}
+function leakedBackups() {
+  return [
+    path.join(os.homedir(), '.claude', 'settings.json.bak-pet-agent-status-TEST'),
+    path.join(os.homedir(), '.codex', 'hooks.json.bak-pet-agent-status-TEST'),
+  ].filter((p) => fs.existsSync(p));
+}
 
 
 test('前置门：fixtures/codex-hooks-facts.md 与实录夹具存在', () => {
@@ -227,7 +226,7 @@ test('落盘记录字段集合恰好是 PROTOCOL.md 字段表（含 threadId，�
   assert.ok(rec.tty === null || /^\/dev\/ttys?[a-z0-9]+$/i.test(rec.tty), `tty 形态异常: ${rec.tty}`);
   assert.ok(rec.pid === null || Number.isFinite(rec.pid));
 
-  const allowed = new Set(sf.REQUIRED.concat(['threadId', 'source']));
+  const allowed = new Set(sf.REQUIRED.concat(['threadId', 'source', 'since']));
   for (const k of Object.keys(rec)) assert.ok(allowed.has(k), `协议外字段: ${k}`);
   // 经 state-files 自己的校验器复核一遍（读侧认不认才算数）
   assert.strictEqual(sf.validateRecord(rec), null);
@@ -914,7 +913,8 @@ test('PROTOCOL.md 只增不改：Claude Code 映射表七行原样在位', () =>
 });
 
 test('测试全程未触碰真实 ~/.codex 与真实状态目录', () => {
-  assert.deepStrictEqual(guardSnapshot(GUARD_PATHS), GUARD_BEFORE, '真实路径本轮被动过');
+  assert.deepStrictEqual(leakedTestFiles(), [], '测试数据泄漏进了真实状态目录');
+  assert.deepStrictEqual(leakedBackups(), [], '测试在真实配置旁留下了备份文件');
 });
 
 // ---- 收尾 ----

@@ -51,31 +51,29 @@ const byId = (rows) => rows.map((r) => r.sessionId);
 
 // ---- 1. error 推导：三个条件缺一不可 ----
 
-// 隔离自证的判据是「本轮没有新增/改动这些真实路径」，不是「它们不存在」——
-// 插件被真实使用后状态目录与备份文件必然存在（2026-09-10 在用户机器上误报过，
-// 4 个套件同时变红，而实现完全正常）。快照在首个 test 前拍，收尾比对。
-function guardSnapshot(paths) {
-  return paths.map((p) => {
-    if (!fs.existsSync(p)) return `${p}@absent`;
-    let st;
-    try { st = fs.statSync(p); } catch (_) { return `${p}@gone`; }
-    if (st.isDirectory()) {
-      const names = fs.readdirSync(p).sort().map((n) => {
-        let m = 0;
-        try { m = fs.statSync(path.join(p, n)).mtimeMs; } catch (_) { /* 竞态 */ }
-        return `${n}:${m}`;
-      });
-      return `${p}@dir[${names.join(',')}]`;
-    }
-    return `${p}@file:${st.mtimeMs}`;
-  });
+// 隔离自证：测试**自己的数据**不得出现在真实路径里。
+//
+// ⚠️ 判据不能是「真实目录一个字节都没变」（2026-09-11 实测教训）：维护者自己也在用这个插件，
+// 开发机上真实 agent 会话会持续写状态目录，mtime 快照必然变化 —— 那个守卫在开发机上随机变红，
+// 且红了也说明不了问题。真正要防的是**测试数据泄漏进真实目录**，所以改为按测试专属前缀检查。
+// 所有测试造的 sessionId 一律带 TEST_ID_PREFIX，泄漏时一抓一个准。
+const TEST_ID_PREFIX = 'pet-as-test-';
+function realStateDir() {
+  return path.join(os.homedir(), '.local', 'state', 'pet-agent-status');
 }
-const GUARD_PATHS = [
-  path.join(os.homedir(), '.local', 'state', 'pet-agent-status'),
-  path.join(os.homedir(), '.claude', 'settings.json.bak-pet-agent-status'),
-  path.join(os.homedir(), '.codex', 'hooks.json.bak-pet-agent-status')
-];
-const GUARD_BEFORE = guardSnapshot(GUARD_PATHS);
+function leakedTestFiles() {
+  const dir = realStateDir();
+  if (!fs.existsSync(dir)) return [];
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch (_) { return []; }
+  return names.filter((n) => n.includes(TEST_ID_PREFIX));
+}
+function leakedBackups() {
+  return [
+    path.join(os.homedir(), '.claude', 'settings.json.bak-pet-agent-status-TEST'),
+    path.join(os.homedir(), '.codex', 'hooks.json.bak-pet-agent-status-TEST'),
+  ].filter((p) => fs.existsSync(p));
+}
 
 test('error 推导：running + 超 60s + pid 不存活', () => {
   const dir = tmp();
@@ -261,6 +259,26 @@ test('running 行时间显 mm:ss，完成行显相对时间', () => {
   const d = rows.find((x) => x.sessionId === 'd');
   assert.strictEqual(r.timeText, '02:07');
   assert.strictEqual(d.timeText, t('time.minutesAgo', { n: 4 }));
+});
+
+// 缺陷回归（2026-09-11「计时突然归零」）：同会话第二笔活跃写入继承 since，
+// mm:ss 从活跃段起点连续计；非活跃行的相对时间仍以最后动静（ts）为准。
+test('心跳重写后 mm:ss 从 since 连续计时，不从新 ts 归零', () => {
+  const dir = tmp();
+  // 真实通道：同一会话先后两笔 running（第二笔 = 任务中的工具调用心跳）
+  sf.writeStatus(rec({ sessionId: 'r', state: 'running', ts: T0 - 5 * MIN }), dir);
+  sf.writeStatus(rec({ sessionId: 'r', state: 'running', lastEvent: 'PreToolUse', ts: T0 - 10 * 1000 }), dir);
+  const row = run(sf.readSnapshots(dir)).rows[0];
+  assert.strictEqual(row.state, 'running');
+  assert.strictEqual(row.timeText, '05:00', '计时起点应是活跃段起点，不是最后心跳');
+});
+
+test('done 行的相对时间仍按最后动静（ts），不受历史 since 影响', () => {
+  const dir = tmp();
+  sf.writeStatus(rec({ sessionId: 'd', state: 'running', ts: T0 - 10 * MIN }), dir);
+  sf.writeStatus(rec({ sessionId: 'd', state: 'done', lastEvent: 'Stop', ts: T0 - 3 * MIN }), dir);
+  const row = run(sf.readSnapshots(dir)).rows[0];
+  assert.strictEqual(row.timeText, t('time.minutesAgo', { n: 3 }));
 });
 
 test('不足 1 分钟的完成行显「刚刚」', () => {
@@ -515,7 +533,8 @@ test('unknown 行不触发任何联动（读不出来的会话绝不报完成）
 
 test('测试全程未触碰真实状态目录', () => {
   const real = path.join(os.homedir(), '.local', 'state', 'pet-agent-status');
-  assert.deepStrictEqual(guardSnapshot(GUARD_PATHS), GUARD_BEFORE, '真实路径本轮被动过');
+  assert.deepStrictEqual(leakedTestFiles(), [], '测试数据泄漏进了真实状态目录');
+  assert.deepStrictEqual(leakedBackups(), [], '测试在真实配置旁留下了备份文件');
 });
 
 for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
@@ -694,4 +713,56 @@ test('不注入 titleFor 时行为不变（向后兼容：老调用方拿到的�
   const { rows } = run(snap, {});
   assert.strictEqual(rows[0].title, '落盘名');
   assert.strictEqual(rows[0].project, 'demo', 'project 字段原样保留');
+});
+
+// ---- 9. 点完就收起（dismiss，2026-09-11 用户需求）----
+//
+// 语义是「已读」不是「删除」：只对已经没有后续的行生效，且该会话再有新动静要自动复现。
+
+test('已结束的行被点掉后从面板收起（done/idle/unknown 三态）', () => {
+  for (const [raw, ageS] of [['done', 10], ['done', 8 * 60], ['waiting', 19 * MIN / 1000]]) {
+    const dir = tmp();
+    const snap = seed(dir, [rec({ sessionId: 'x', state: raw, lastEvent: 'Stop', ts: T0 - ageS * 1000 })]);
+    const before = run(snap, { isPidAlive: () => true }).rows;
+    assert.strictEqual(before.length, 1, `前置：${raw}/${ageS}s 应有行`);
+    assert.ok(agg.DISMISSIBLE.has(before[0].state), `${before[0].state} 应属可收起态`);
+    const after = agg.aggregate(sf.readSnapshots(dir),
+      { now: T0, isPidAlive: () => true, t, dismissedAt: { x: T0 } }).rows;
+    assert.strictEqual(after.length, 0, `${before[0].state} 点掉后应收起`);
+  }
+});
+
+test('运行中/等待批准被点击不收起（还在进行中，收起会丢失视野）', () => {
+  for (const state of ['running', 'waiting']) {
+    const dir = tmp();
+    const snap = seed(dir, [rec({ sessionId: 'x', state, lastEvent: 'Notification', ts: T0 - 5000 })]);
+    const rows = agg.aggregate(sf.readSnapshots(dir),
+      { now: T0, isPidAlive: () => true, t, dismissedAt: { x: T0 } }).rows;
+    assert.strictEqual(rows.length, 1, `${state} 不该被收起`);
+    assert.strictEqual(rows[0].state, state);
+  }
+});
+
+test('点掉后该会话再有新动静 → 自动复现（已读语义，不是永久删除）', () => {
+  const dir = tmp();
+  // 先写 done 并点掉
+  sf.writeStatus(rec({ sessionId: 'x', state: 'done', lastEvent: 'Stop', ts: T0 - 10 * 1000 }), dir);
+  const dismissed = { x: T0 };
+  assert.strictEqual(agg.aggregate(sf.readSnapshots(dir), { now: T0, isPidAlive: () => true, t, dismissedAt: dismissed }).rows.length, 0);
+  // 同一会话又跑起来了（ts 变新）
+  sf.writeStatus(rec({ sessionId: 'x', state: 'running', lastEvent: 'UserPromptSubmit', ts: T0 + 5000 }), dir);
+  const revived = agg.aggregate(sf.readSnapshots(dir), { now: T0 + 6000, isPidAlive: () => true, t, dismissedAt: dismissed }).rows;
+  assert.strictEqual(revived.length, 1, '新动静应让行复现');
+  assert.strictEqual(revived[0].state, 'running');
+});
+
+test('dismissedAt 只影响被点的那条，不波及其它会话', () => {
+  const dir = tmp();
+  const snap = seed(dir, [
+    rec({ sessionId: 'a', state: 'done', lastEvent: 'Stop', ts: T0 - 10 * 1000 }),
+    rec({ sessionId: 'b', state: 'done', lastEvent: 'Stop', ts: T0 - 20 * 1000 })
+  ]);
+  const rows = agg.aggregate(sf.readSnapshots(dir),
+    { now: T0, isPidAlive: () => true, t, dismissedAt: { a: T0 } }).rows;
+  assert.deepStrictEqual(rows.map((r) => r.sessionId), ['b']);
 });

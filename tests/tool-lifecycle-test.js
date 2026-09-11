@@ -138,30 +138,29 @@ function collectorOn(dir, over) {
 
 (async function main() {
   // ---- 1. scheduler 契约（criteria §2 第一条 + 宿主已知坑）----
-// 隔离自证的判据是「本轮没有新增/改动这些真实路径」，不是「它们不存在」——
-// 插件被真实使用后状态目录与备份文件必然存在（2026-09-10 在用户机器上误报过）。
-function guardSnapshot(paths) {
-  return paths.map((p) => {
-    if (!fs.existsSync(p)) return `${p}@absent`;
-    let st;
-    try { st = fs.statSync(p); } catch (_) { return `${p}@gone`; }
-    if (st.isDirectory()) {
-      const names = fs.readdirSync(p).sort().map((n) => {
-        let m = 0;
-        try { m = fs.statSync(path.join(p, n)).mtimeMs; } catch (_) { /* 竞态 */ }
-        return `${n}:${m}`;
-      });
-      return `${p}@dir[${names.join(',')}]`;
-    }
-    return `${p}@file:${st.mtimeMs}`;
-  });
+// 隔离自证：测试**自己的数据**不得出现在真实路径里。
+//
+// ⚠️ 判据不能是「真实目录一个字节都没变」（2026-09-11 实测教训）：维护者自己也在用这个插件，
+// 开发机上真实 agent 会话会持续写状态目录，mtime 快照必然变化 —— 那个守卫在开发机上随机变红，
+// 且红了也说明不了问题。真正要防的是**测试数据泄漏进真实目录**，所以改为按测试专属前缀检查。
+// 所有测试造的 sessionId 一律带 TEST_ID_PREFIX，泄漏时一抓一个准。
+const TEST_ID_PREFIX = 'pet-as-test-';
+function realStateDir() {
+  return path.join(os.homedir(), '.local', 'state', 'pet-agent-status');
 }
-const GUARD_PATHS = [
-  path.join(os.homedir(), '.local', 'state', 'pet-agent-status'),
-  path.join(os.homedir(), '.claude', 'settings.json.bak-pet-agent-status'),
-  path.join(os.homedir(), '.codex', 'hooks.json.bak-pet-agent-status')
-];
-const GUARD_BEFORE = guardSnapshot(GUARD_PATHS);
+function leakedTestFiles() {
+  const dir = realStateDir();
+  if (!fs.existsSync(dir)) return [];
+  let names = [];
+  try { names = fs.readdirSync(dir); } catch (_) { return []; }
+  return names.filter((n) => n.includes(TEST_ID_PREFIX));
+}
+function leakedBackups() {
+  return [
+    path.join(os.homedir(), '.claude', 'settings.json.bak-pet-agent-status-TEST'),
+    path.join(os.homedir(), '.codex', 'hooks.json.bak-pet-agent-status-TEST'),
+  ].filter((p) => fs.existsSync(p));
+}
 
 
   await test('start 用 await 取 taskId 并存下（不是存 Promise）', async () => {
@@ -597,7 +596,8 @@ const GUARD_BEFORE = guardSnapshot(GUARD_PATHS);
 
   await test('测试全程未触碰真实状态目录', () => {
     const real = path.join(os.homedir(), '.local', 'state', 'pet-agent-status');
-    assert.deepStrictEqual(guardSnapshot(GUARD_PATHS), GUARD_BEFORE, '真实路径本轮被动过');
+  assert.deepStrictEqual(leakedTestFiles(), [], '测试数据泄漏进了真实状态目录');
+  assert.deepStrictEqual(leakedBackups(), [], '测试在真实配置旁留下了备份文件');
   });
 
   for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
@@ -607,4 +607,45 @@ const GUARD_BEFORE = guardSnapshot(GUARD_PATHS);
     process.exit(1);
   }
   console.log(`\ntool-lifecycle-test: ${passed} passed`);
+
+  // ---- 点完就收起（dismiss）的 tool 层闭环（2026-09-11 用户需求）----
+  // aggregate 单测只证明「给了 dismissedAt 就会过滤」；这里证明**点击真的会去记那一笔**，
+  // 且记完立刻反映到推给面板的下一份快照里（少了这段，两边各自绿、功能仍是断的）。
+  await test('跳转成功后，已结束的行从下一份快照里消失', async () => {
+    const dir = tmp();
+    const T = Date.now();
+    sf.writeStatus(rec({ sessionId: 'jd', state: 'done', lastEvent: 'Stop', ts: T - 5000, tty: '/dev/ttys9' }), dir);
+    const m = mockPet();
+    const c = collectorOn(dir, {
+      now: () => T,
+      jumpRunner: () => ({ ok: true }),
+      // 让终端归属判得出来，否则 runJump 返回 unavailable，压根走不到成功分支
+      psTree: () => [{ pid: 1, ppid: 0, comm: '/A/iTerm.app/Contents/MacOS/iTerm2', tty: 'ttys9' }],
+    });
+    c.tick(m.pet);
+    const before = m.state.snapshots().pop().data.rows;
+    assert.strictEqual(before.length, 1, '前置：应有一条 done 行');
+
+    const res = c.handleJump(m.pet, { sessionId: 'jd' });
+    assert.strictEqual(res.ok, true, `跳转应成功，实际 ${JSON.stringify(res)}`);
+    const after = m.state.snapshots().pop().data.rows;
+    assert.strictEqual(after.length, 0, '点完后该行应从快照里消失');
+  });
+
+  await test('跳转失败时不收起（没跳成功就藏起来，用户会找不到会话）', async () => {
+    const dir = tmp();
+    const T = Date.now();
+    sf.writeStatus(rec({ sessionId: 'jf', state: 'done', lastEvent: 'Stop', ts: T - 5000, tty: '/dev/ttys9' }), dir);
+    const m = mockPet();
+    const c = collectorOn(dir, {
+      now: () => T,
+      jumpRunner: () => ({ ok: false, reason: 'osascript boom' }),
+      psTree: () => [{ pid: 1, ppid: 0, comm: '/A/iTerm.app/Contents/MacOS/iTerm2', tty: 'ttys9' }],
+    });
+    c.tick(m.pet);
+    c.handleJump(m.pet, { sessionId: 'jf' });
+    const after = m.state.snapshots().pop().data.rows;
+    assert.strictEqual(after.length, 1, '跳转失败必须留着这一行');
+    assert.ok(after[0].jumpError, '并且要显示行内错误');
+  });
 })();

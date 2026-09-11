@@ -78,20 +78,15 @@ for (const [fixture, event, state] of MAPPING) {
 }
 
 // ---- 2. 落盘记录符合 schema:1 ----
-// 隔离自证的正确判据是「本轮没有新增/改动真实目录里的文件」，不是「目录不存在」——
-// 插件一旦被真实使用，该目录必然存在（2026-09-10 在用户机器上误报过）。
-// 快照在测试开始前拍，收尾时比对文件名与 mtime。
-function realStateDirSnapshot() {
-  const real = path.join(os.homedir(), '.local', 'state', 'pet-agent-status');
-  if (!fs.existsSync(real)) return { real, exists: false, entries: [] };
-  const entries = fs.readdirSync(real).sort().map((n) => {
-    let mtime = 0;
-    try { mtime = fs.statSync(path.join(real, n)).mtimeMs; } catch (_) { /* 竞态删除 */ }
-    return `${n}@${mtime}`;
-  });
-  return { real, exists: true, entries };
+// 隔离自证：测试**自己的数据**不得出现在真实路径里。
+// 判据不是「真实目录没变过」——维护者自己也在用这个插件，开发机上真实会话会持续写状态目录，
+// 那种守卫随机变红且说明不了问题（2026-09-11 实测）。按测试专属前缀查泄漏才抓得准。
+const TEST_ID_PREFIX = 'pet-as-test-';
+function leakedTestFiles() {
+  const dir = path.join(os.homedir(), '.local', 'state', 'pet-agent-status');
+  if (!fs.existsSync(dir)) return [];
+  try { return fs.readdirSync(dir).filter((n) => n.includes(TEST_ID_PREFIX)); } catch (_) { return []; }
 }
-const REAL_STATE_BEFORE = realStateDirSnapshot();
 
 test('落盘记录字段齐全且符合 PROTOCOL.md schema:1', () => {
   const dir = tmp();
@@ -116,7 +111,7 @@ test('落盘记录字段齐全且符合 PROTOCOL.md schema:1', () => {
   }
   // 未在协议里的字段不许乱写（会话正文除 title 让步边界外不许采集）
   const extra = Object.keys(rec).filter((k) => ![
-    'schema', 'agent', 'sessionId', 'cwd', 'project', 'tty', 'pid', 'state', 'lastEvent', 'ts', 'threadId', 'source', 'title'
+    'schema', 'agent', 'sessionId', 'cwd', 'project', 'tty', 'pid', 'state', 'lastEvent', 'ts', 'threadId', 'source', 'title', 'since'
   ].includes(k));
   assert.deepStrictEqual(extra, [], `写入了协议外字段: ${extra.join(',')}`);
   // US-9 显式反转了「零 prompt 内容」：标题 = prompt 首行（64 码点截断）是唯一让步，
@@ -260,11 +255,44 @@ test('恶意 session_id 被清洗，不穿越出状态目录', () => {
   assert.ok(!fs.existsSync('/etc/passwd.json'), '绝不许写到目录外');
 });
 
+// ---- 5.5 缺陷回归（2026-09-11 用户实测「计时突然归零」）：since 只在活跃段起点定一次 ----
+// 根因：每个 hook 事件都整文件重写、ts 取写入时刻，面板 mm:ss 用 now-ts 计时，
+// 于是每次工具调用（PreToolUse）都把计时打回 00:00。修法：协议加选填 since（活跃段起点），
+// 同处活跃组（running/waiting）的后续事件继承之，离开活跃组再回来才重置。
+test('工具调用/权限等待/批准恢复都不重置 since；新一轮任务才重置', () => {
+  const dir = tmp();
+  const base = fixtureOf('user-prompt-submit.json');
+  const ev = (name) => Object.assign({}, base, { hook_event_name: name, session_id: 'since-seq' });
+  const pause = (ms) => { const t0 = Date.now(); while (Date.now() - t0 < ms); };
+
+  runHook(ev('UserPromptSubmit'), dir);
+  const first = readOnly(dir);
+  assert.strictEqual(first.since, first.ts, '活跃段第一笔：since 从本次 ts 起算');
+
+  pause(15); runHook(ev('PreToolUse'), dir);
+  const afterTool = readOnly(dir);
+  assert.ok(afterTool.ts > first.ts, '心跳 ts 应随事件刷新');
+  assert.strictEqual(afterTool.since, first.since, '工具调用不得重置计时起点（本缺陷主症状）');
+
+  pause(15); runHook(ev('Notification'), dir);
+  assert.strictEqual(readOnly(dir).since, first.since, 'running→waiting 继承 since');
+
+  pause(15); runHook(ev('PostToolUse'), dir);
+  assert.strictEqual(readOnly(dir).since, first.since, '批准后恢复 running 继承 since');
+
+  pause(15); runHook(ev('Stop'), dir);
+  const doneRec = readOnly(dir);
+  assert.ok(!('since' in doneRec), '离开活跃组（done）不写 since');
+
+  pause(15); runHook(ev('UserPromptSubmit'), dir);
+  const next = readOnly(dir);
+  assert.strictEqual(next.since, next.ts, '新一轮任务：since 重置为新起点');
+  assert.ok(next.since > first.since, '新起点晚于上一段');
+});
+
 // ---- 6. 隔离自证：全程没碰真实状态目录 ----
 test('测试期间未写入真实 ~/.local/state/pet-agent-status', () => {
-  const after = realStateDirSnapshot();
-  assert.deepStrictEqual(after.entries, REAL_STATE_BEFORE.entries,
-    `真实状态目录被污染: ${after.real}`);
+  assert.deepStrictEqual(leakedTestFiles(), [], '测试数据泄漏进了真实状态目录');
 });
 
 for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
