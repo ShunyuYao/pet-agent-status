@@ -631,3 +631,30 @@ test('App 行（form app、无 tty、合法 threadId）canJump=true；threadId �
   const bare = rows.find((r) => r.sessionId === 'no-thread');
   assert.strictEqual(bare.canJump, false, '无 tty 无 threadId 不给假入口');
 });
+
+// ---- 8. unknown 的两个来源，副行文案必须分开（2026-09-11 用户反馈）----
+
+test('久无心跳的 unknown 给行动指引，与「文件读不出」的 unknown 文案不同', () => {
+  const dir = tmp();
+  // 用户真实场景：批准后 agent 不再发事件，waiting 卡住 19 分钟，进程还活着
+  const snap = seed(dir, [rec({ sessionId: 'stale', state: 'waiting', lastEvent: 'Notification', ts: T0 - 19 * MIN })]);
+  const stale = run(snap, { isPidAlive: () => true }).rows[0];
+  assert.strictEqual(stale.state, 'unknown', '展示态仍是 unknown（不新增展示态）');
+  assert.strictEqual(stale.subline, t('state.stale'), '应给「可能已结束·点击确认」这类行动指引');
+
+  // 对照：真读不出来的文件——给指引也没用，保持中性文案
+  const broken = agg.aggregate({ records: [], unknown: [{ file: 'x.json', reason: 'bad json' }] },
+    { now: T0, isPidAlive: () => true, t }).rows[0];
+  assert.strictEqual(broken.state, 'unknown');
+  assert.strictEqual(broken.subline, t('state.unknown'));
+
+  assert.notStrictEqual(stale.subline, broken.subline, '两种处境不能共用一句话');
+});
+
+test('stale 文案不与 idle/done 混淆（绝不误报完成）', () => {
+  const dir = tmp();
+  const snap = seed(dir, [rec({ sessionId: 's', state: 'running', ts: T0 - 19 * MIN })]);
+  const row = run(snap, { isPidAlive: () => true }).rows[0];
+  assert.notStrictEqual(row.subline, t('state.done'), 'unknown 绝不能显示成已完成');
+  assert.notStrictEqual(row.subline, t('state.idle'));
+});

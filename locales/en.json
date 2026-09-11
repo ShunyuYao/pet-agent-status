@@ -39,6 +39,7 @@
   "state.error": "Possibly interrupted",
   "state.idle": "Idle",
   "state.running": "Running",
+  "state.stale": "May have finished · click to check",
   "state.unknown": "Unknown",
   "state.waiting": "Waiting for you",
   "time.justNow": "just now",

@@ -39,6 +39,7 @@
   "state.error": "可能已中断",
   "state.idle": "空闲",
   "state.running": "运行中",
+  "state.stale": "可能已结束 · 点击回终端确认",
   "state.unknown": "状态未知",
   "state.waiting": "等待你批准",
   "time.justNow": "刚刚",
