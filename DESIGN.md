@@ -30,8 +30,9 @@
   与宠物脚下折叠徽标（宿主限死 2 段）同一条取舍规则，两处内容一致。全零隐藏。
 - 会话行（圆角 12，左起）：
   1. **agent 徽标 26×26 圆角 8**：厂牌看主图标（Claude=陶土底白色官方星标 SVG；Codex=黑底白色
-     OpenAI 官方结标 SVG，打包本地 SVG 资源，不引用远程）；**右下角 13×13 形态角标**：
-     `>_`（CLI 终端会话）/ 窗口形（Codex App 任务，二期）。
+     OpenAI 官方结标 SVG；WorkBuddy=绿底猫脸产品图，栅格 PNG 内联 data URI——无官方单色
+     SVG，硬描反而失真。均打包本地资源，不引用远程）；**右下角 13×13 形态角标**：
+     `>_`（CLI 终端会话）/ 窗口形（App 任务：Codex App 与 WorkBuddy）。
   2. 中列：会话标题（白 13；US-9：Codex 线程 AI 标题 > 终端标签标题（Claude Code 的
      AI 标题只在终端里，见 fixtures/terminal-titles-facts.md）> 首条 prompt 首行 >
      项目目录名兜底，有标题时目录名转 tooltip）+ 状态副行（11，颜色随状态：running 浅蓝/waiting 橙/done 绿/error 红/idle 灰）。

@@ -1,9 +1,10 @@
 # pet-agent-status
 
-桌宠（吐梨邦）插件：把本机 **Claude Code / Codex** 会话状态实时显示在桌宠上——
+桌宠（吐梨邦）插件：把本机 **Claude Code / Codex / WorkBuddy** 会话状态实时显示在桌宠上——
 插件面板里看多会话列表，任务完成/等待批准时宠物用动画和气泡提醒你，点击会话行一键跳回对应终端。
 
-- 状态来源：Claude Code / Codex CLI 官方 hooks → 本机状态文件（协议见 `PROTOCOL.md`）
+- 状态来源：Claude Code / Codex CLI 官方 hooks → 本机状态文件（协议见 `PROTOCOL.md`）；
+  WorkBuddy 零配置（只读轮询其本机 SQLite 会话表，没装即无行为）
 - UI 规格：`DESIGN.md`（Figma 同源）
 - 安装：宿主设置页「插件 → 手动安装」选择本仓库目录（开发者模式），或等市场上架
 - 设置：宿主设置页「插件」里点本插件的**「打开面板」**，面板右上角 **⚙** 即插件设置
@@ -22,10 +23,11 @@
 | `fs` 读写 `~/.claude/settings.json`、`~/.codex/hooks.json` | 「一键接入/移除钩子」时合并写入 hooks 条目，写前自动备份 | 仅接入/卸载动作时；不碰 Codex 的 `hooks.state` 信任文件 |
 | `child_process` spawn `ps` | 按会话的 tty 反查它属于哪个终端 App（决定这一行能否跳转） | 只读进程表，10 秒缓存 |
 | `child_process` spawn `osascript` | ① 点击会话行时聚焦 iTerm2 / Terminal.app 对应窗口标签页；② 读取终端标签标题做会话名（Claude Code 把 AI 生成的标题推给了终端，磁盘上没有） | ① 仅跳转动作时；② 15s 缓存的只读查询，仅查已在运行的终端（不拉起 App），与跳转同一份自动化授权 |
-| `child_process` spawn `open` | ① 点击 Codex App 任务时经 `codex://threads/<id>` 深链接跳转；② 点击 Claude Desktop App 会话时 `open -b` 把 Claude App 提到前台（App 无会话寻址深链接，只兜底激活不假装精确） | 仅跳转动作时 |
+| `child_process` spawn `open` | ① 点击 Codex App / WorkBuddy 任务时经 `codex://threads/<id>` / `workbuddy://chat/<id>` 深链接跳转；② 点击 Claude Desktop App 会话时 `open -b` 把 Claude App 提到前台（App 无会话寻址深链接，只兜底激活不假装精确） | 仅跳转动作时 |
 | `fs` **只读** `~/Library/Application Support/Claude/claude-code-sessions/` | Claude Desktop App 会话的行标题（App 落盘的 AI 标题）与「这行是 App 会话」的归属判定 | 只读，30s 缓存；读不到自动降级（无标题、无跳转入口） |
 | `net` 连接 `~/.codex/ipc/ipc.sock` | Codex App 实时增强（**默认开，面板设置里可关**）：只读监听任务动态与跟随状态 | 开关打开时（默认）；故障自动停用 |
 | `fs`/`node:sqlite` **只读** `~/.codex/sqlite/codex-dev.db`、`~/.codex/session_index.jsonl` | 会话行显示 Codex 自己生成的线程标题 | 只读，30s 缓存；读不到自动降级为目录名 |
+| `fs`/`node:sqlite` **只读** `~/.workbuddy/workbuddy.db`（+ `~/.workbuddy/sessions/` 心跳文件） | WorkBuddy 会话状态与标题（官方权威状态就在该表，实测见 `fixtures/workbuddy-facts.md`） | 每 2s 只读轮询；锁死/没装/驱动缺失一律静默降级 |
 
 另使用宿主 SDK：`storage`（含实验开关持久化）`pet`（bubble/playAnim/speak）`pet.badge`
 （宠物脚下折叠徽标，需宿主 ≥0.19.0，老宿主自动降级）`ui`（面板开关）`events` `scheduler`。

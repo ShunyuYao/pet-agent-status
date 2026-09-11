@@ -16,6 +16,7 @@ const deeplink = require(path.join(LIB, 'codex-deeplink.js'));
 const { createCodexIpc } = require(path.join(LIB, 'codex-ipc.js'));
 const { createCodexAppIngest } = require(path.join(LIB, 'codex-app-ingest.js'));
 const { createRolloutActivity } = require(path.join(LIB, 'codex-rollout-activity.js'));
+const { createWorkbuddySource } = require(path.join(LIB, 'workbuddy-source.js'));
 const { createCodexThreadTitles } = require(path.join(LIB, 'codex-thread-titles.js'));
 const cds = require(path.join(LIB, 'claude-desktop-sessions.js'));
 const { createTerminalTitles } = require(path.join(LIB, 'terminal-titles.js'));
@@ -96,6 +97,9 @@ function createCollector(deps) {
   // rollout 活动探测（PROTOCOL.md「rollout 活动信号」）：App 任务 running 的主信号。
   // 可注入：测试用假目录，绝不 stat 真实 ~/.codex/sessions。
   const rollout = d.rolloutActivity || createRolloutActivity({ codexHome: d.codexHome, now });
+  // WorkBuddy 来源（PROTOCOL.md「WorkBuddy 来源」）：SQLite 只读轮询，唯一实现在
+  // lib/workbuddy-source.js。可注入：测试用假 home/桩，绝不碰真实 ~/.workbuddy。
+  const workbuddy = d.workbuddySource || createWorkbuddySource({ home: d.workbuddyHome, dir: d.dir, now });
   // 上一轮 tick 看到的活动线程集合。read-state 广播在两轮 tick 之间到达，
   // 用它豁免「提交时刻的已读→ended 误翻」（≤2s 陈旧 vs 30s 活动窗，够用）。
   let rolloutActive = new Map();
@@ -237,9 +241,8 @@ function createCollector(deps) {
     const sessionId = data && data.sessionId;
     if (!sessionId) return { ok: false, reason: 'unavailable' };
     const row = lastSnapshot.rows.find((r) => r.sessionId === sessionId);
-    // 两条并列的导航路（判定唯一实现在 lib/codex-deeplink.js#pickNavigator）：
-    // Codex App 任务没有 tty、只有 threadId，只能走深链接；其余（含所有 CLI 会话）走 tty 聚焦。
-    // 三条并列的导航路（判定各自唯一实现）：Codex App 深链接 / Claude App 激活兜底 /
+    // 并列的导航路（判定各自唯一实现）：Codex App / WorkBuddy 深链接
+    // （codex-deeplink#pickNavigator）/ Claude App 激活兜底（cds#pickAppNavigator）/
     // tty 聚焦（含所有 CLI 会话）。Claude App 会话没有可寻址的深链接（facts §4），
     // 兜底只把 App 提到前台，不假装能定位到具体会话。
     const nav = deeplink.pickNavigator(row)
@@ -253,8 +256,10 @@ function createCollector(deps) {
     } else if (nav.kind === 'deeplink') {
       const r = deeplink.openDeepLink(nav.url, d.execFile);
       // `open` 受理 ≠ 页面真的呈现（fixtures/codex-ipc-facts.md §6）——这里只能报「已发起」。
-      // Scheme 没注册（没装 Codex App）与一般失败文案不同，故 reason 分开传。
-      result = r.ok ? { ok: true } : { ok: false, reason: r.reason === 'no-scheme' ? 'no-codex-app' : 'failed' };
+      // Scheme 没注册（没装对应 App）与一般失败文案不同，故 reason 分开传；
+      // 两个厂牌的「没装」提示各自指名（把 Codex 的提示甩给 WorkBuddy 行是误导）。
+      const noScheme = nav.url.startsWith('workbuddy://') ? 'no-workbuddy-app' : 'no-codex-app';
+      result = r.ok ? { ok: true } : { ok: false, reason: r.reason === 'no-scheme' ? noScheme : 'failed' };
     } else {
       result = terminalJump.runJump(row.tty, { psTree: psTreeCached(at), runner: jumpRunner });
     }
@@ -281,6 +286,8 @@ function createCollector(deps) {
           ? t('jump.noCodexApp')
           : result.reason === 'no-claude-app'
             ? t('jump.noClaudeApp')
+          : result.reason === 'no-workbuddy-app'
+            ? t('jump.noWorkbuddyApp')
             : t('jump.failed', { reason: result.reason });
       jumpErrors.set(sessionId, { text, at });
     }
@@ -307,6 +314,9 @@ function createCollector(deps) {
       } else if (rolloutActive.size) {
         rolloutActive = new Map();
       }
+      // WorkBuddy 摄入同样放在读快照之前（本轮写下的行本轮进面板）。
+      // 无独立开关（v1，PROTOCOL.md）：没装 WorkBuddy 时模块自己静默无行为。
+      try { workbuddy.tick(); } catch (_) { /* 摄入挂了不打死采集轮 */ }
       const raw = readSnapshots(d.dir);
       pruneDismissed(raw.records || []);   // 会话文件没了就忘掉它的已读记录
       const result = aggregate(raw, {

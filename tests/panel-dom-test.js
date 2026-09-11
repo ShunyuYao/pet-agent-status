@@ -387,7 +387,8 @@ test('running 行显 mm:ss，done 行显相对时间', () => {
 test('厂牌徽标：Claude 陶土底 / Codex 黑底，主图标用官方 path，角标区分 CLI 与 App', () => {
   const snap = snapshotOf([
     rec({ sessionId: 'c', agent: 'claude-code', ts: T0 }),
-    rec({ sessionId: 'x', agent: 'codex', ts: T0 - 1000 })
+    rec({ sessionId: 'x', agent: 'codex', ts: T0 - 1000 }),
+    rec({ sessionId: 'w', agent: 'workbuddy', form: 'app', tty: null, ts: T0 - 2000 })
   ]);
   const p = mountPanel();
   p.push('agent-status:snapshot', snap);
@@ -398,9 +399,16 @@ test('厂牌徽标：Claude 陶土底 / Codex 黑底，主图标用官方 path�
   // 主图标是仓内官方 SVG 的 path，不是字母占位
   assert.strictEqual(badgeOf('c').querySelector('svg path').getAttribute('d'), svgPathOf('claude.svg'));
   assert.strictEqual(badgeOf('x').querySelector('svg path').getAttribute('d'), svgPathOf('openai.svg'));
-  // 形态角标：本轮全是 CLI（>_）
+  // WorkBuddy：栅格产品图（内联 data URI），不是 SVG path 也不是字母占位
+  assert.ok(badgeOf('w').classList.contains('is-workbuddy'));
+  const wbImg = badgeOf('w').querySelector('img');
+  assert.ok(wbImg, 'WorkBuddy 徽标必须是 img');
+  assert.ok(wbImg.getAttribute('src').startsWith('data:image/png;base64,'), '图必须内联（零远程资源红线）');
+  assert.strictEqual(badgeOf('w').querySelector('svg'), null);
+  // 形态角标：CLI（>_）与 App 各归各
   assert.strictEqual(badgeOf('c').querySelector('.form-badge').dataset.form, 'cli');
   assert.strictEqual(badgeOf('c').querySelector('.form-badge').textContent, '>_');
+  assert.strictEqual(badgeOf('w').querySelector('.form-badge').dataset.form, 'app');
   p.close();
 });
 
@@ -620,7 +628,7 @@ test('tool 真的把 locale 随快照发出来（不是 panel 自说自话）', 
   };
   const dir = tmp();
   sf.writeStatus(rec({ sessionId: 'a', ts: T0 }), dir);
-  const c = tool.createCollector({ dir, locale: 'zh-CN', now: () => T0, isPidAlive: () => true, createCodexIpc: fakeIpc , threadTitles: { lookup: () => null }, terminalTitles: { lookup: () => null }, rolloutActivity: { activeThreads: () => new Map() } });
+  const c = tool.createCollector({ dir, locale: 'zh-CN', now: () => T0, isPidAlive: () => true, createCodexIpc: fakeIpc , threadTitles: { lookup: () => null }, terminalTitles: { lookup: () => null }, rolloutActivity: { activeThreads: () => new Map() }, workbuddySource: { tick: () => {} } });
   c.tick(petSide);
   const snap = emitted.find((e) => e.name === tool.SNAPSHOT_EVENT).data;
   assert.strictEqual(snap.locale, 'zh-CN', 'tool 没把 locale 随快照下发');
@@ -687,7 +695,7 @@ const pending = testAsync('端到端：点接入 → tool 真写 settings.json �
   };
 
   // panel 侧的 pet mock：emit 转投 tool 的 handler
-  const collector = tool.createCollector({ dir, settingsFile, now: () => T0, isPidAlive: () => true, createCodexIpc: fakeIpc , threadTitles: { lookup: () => null }, terminalTitles: { lookup: () => null }, rolloutActivity: { activeThreads: () => new Map() } });
+  const collector = tool.createCollector({ dir, settingsFile, now: () => T0, isPidAlive: () => true, createCodexIpc: fakeIpc , threadTitles: { lookup: () => null }, terminalTitles: { lookup: () => null }, rolloutActivity: { activeThreads: () => new Map() }, workbuddySource: { tick: () => {} } });
 
   panel = mountPanel();
   // 把 panel 的 emit 接到 tool 上（mountPanel 的 mock 只记流水，这里补上转发）
