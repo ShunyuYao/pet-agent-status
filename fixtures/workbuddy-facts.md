@@ -1,6 +1,6 @@
 # WorkBuddy（腾讯）会话状态调研实录
 
-2026-09-11 首轮调研（静态 + 本机活体安装检查，未做真实任务运行验证）。
+2026-09-11 首轮调研（静态 + 本机活体安装检查）；同日晚完成活体验证（§5）。
 采集纪律与 codex-ipc-facts.md 相同：只看结构/元数据/键名，不采会话正文。
 
 ## 1. WorkBuddy 是什么
@@ -57,9 +57,7 @@ expert_id…, permission_mode, use_sandbox_cli, mode, project_id
 - 关停清扫：`UPDATE sessions SET status='Terminated' WHERE LOWER(status) NOT IN
   ('completed','failed','terminated','archived')`——终态集合即这四个（比较是
   LOWER 的，落库大小写混用：默认 'Pending'、有 "Completed" 也有 "completed"）。
-- **待活体验证**：`working`/`planning` 是否在任务运行期间实时写库（而非只在
-  终态落一次）。本机库里只有 6 条 7 月的 completed 旧会话，无法离线证明。
-  验证法：跑一个 WorkBuddy 任务，1s 轮询 `mode=ro` 读 status 列变化。
+- ~~待活体验证~~ **已验证（§5）**：`working`/`planning` 在任务运行期间实时写库。
 
 ### 3.3 rollout 文件（与 Claude Code 同款布局）
 
@@ -86,5 +84,26 @@ expert_id…, permission_mode, use_sandbox_cli, mode, project_id
 3. 探针：sessions/<pid>.json 心跳判「服务是否活着」。
 4. 不走：57344 HTTP API（路由未知、无文档）、IPC 逆向（无必要，SQLite 已够）。
 
-**先决条件**：任何实现前必须先做 §3.2 的活体验证（跑真任务录 status 序列），
-把结果补进本文件——同 codex 的「先复现再写代码」纪律。
+## 5. 活体验证实录（2026-09-11 晚，无需用户参与）
+
+方法：带 `--remote-debugging-port=9340` 重启 WorkBuddy，CDP 走真实输入管线
+（focus → `Input.insertText` → Enter 键事件）发一个最小任务（「请只回复 ok」），
+同时 0.5s 轮询 `mode=ro` 只读 SQLite + projects/ jsonl mtime。录得完整序列：
+
+```
+23:54:03 DB 3dc39631 status=pending    updated_at=…040325 last_activity_at=None
+23:54:03 JSONL 3dc39631 创建 size=0
+23:54:04 DB 3dc39631 status=planning   （jsonl 同步开始追加，size=17540）
+23:54:06 DB 3dc39631 status=working    （updated_at 秒级刷新，两次写入）
+23:54:11 DB 3dc39631 status=completed  last_activity_at 同步落终值
+```
+
+结论确认：
+- **`sessions.status` 是实时写的**（pending→planning→working→completed 各态独立落库，
+  秒级粒度），`updated_at` 运行期持续刷新——SQLite 只读轮询单一信号即可覆盖
+  运行中/结束两侧，不需要像 Codex 那样拼 IPC+rollout 双信号。
+- jsonl rollout 与 DB 同步追加，兜底信号同样成立。
+- **注意**：app 启动/关闭窗口期 DB 短暂锁死（openError/OperationalError 连续数秒），
+  只读轮询必须把锁错误当常态静默跳过，不得据此判「WorkBuddy 不可用」。
+- 验证残留：会话 3dc39631（「请只回复 ok」）留在用户 WorkBuddy 历史里，无害。
+
