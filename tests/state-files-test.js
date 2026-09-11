@@ -390,3 +390,17 @@ test('since 非数字时判损坏（不接受垃圾值）', () => {
   assert.strictEqual(snap.records.length, 0);
   assert.strictEqual(snap.unknown.length, 1);
 });
+
+test('readStatus 读回合法记录、拒绝损坏记录（判据方向别写反）', () => {
+  // 2026-09-11 真实回归：validateRecord 合法时返回 null，写成 `validateRecord(x) ? null : x`
+  // 正好反了——合法记录被丢掉，于是 since 永远继承不到、且离线测试全绿而真宿主里行渲染不出来。
+  const dir = tmp();
+  const good = { schema: 1, agent: 'claude-code', sessionId: 'g', cwd: '/x', project: 'p', tty: null, pid: 1, state: 'running', lastEvent: 'X', ts: 1000 };
+  sf.writeStatus(good, dir);
+  assert.ok(sf.readStatus('g', dir), '合法记录必须读得回来');
+  assert.strictEqual(sf.readStatus('g', dir).sessionId, 'g');
+
+  fs.writeFileSync(path.join(dir, 'bad.json'), JSON.stringify({ schema: 1, sessionId: 'bad' }));
+  assert.strictEqual(sf.readStatus('bad', dir), null, '损坏记录必须返回 null');
+  assert.strictEqual(sf.readStatus('nonexistent', dir), null, '不存在时返回 null');
+});
