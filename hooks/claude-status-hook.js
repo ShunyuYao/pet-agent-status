@@ -20,6 +20,7 @@ function handle(raw) {
   const { stateForEvent, isEmptySessionEnd } = require(path.join(LIB, 'claude-events.js'));
   const { writeStatus, readStatus, removeStatus } = require(path.join(LIB, 'state-files.js'));
   const { resolveTty, resolveAgentPid } = require(path.join(LIB, 'tty-detect.js'));
+  const { isNestedAgentSession } = require(path.join(LIB, 'nested-session.js'));
 
   const event = JSON.parse(raw);
   // 传完整事件：Notification 要靠 matcher/message 区分「等批准」与「闲置提醒」
@@ -29,6 +30,11 @@ function handle(raw) {
 
   // session_id / cwd 是协议必填项的来源，缺了写出来也是坏记录，不如不写
   if (!event.session_id || !event.cwd) return;
+
+  // 别的 agent 起的子进程会话（`claude -p …` 跑在某个 agent 的 Bash 工具里）不进面板：
+  // 它跳不过去（tty 是从父会话继承的），也不是用户在跟的任务。
+  // 判据与 fail-open 方向在 lib/nested-session.js；这里放在最前面，连已有记录都不碰。
+  if (isNestedAgentSession(process.ppid)) return;
 
   // 空会话收尾：一步都没往前走过的会话结束时清掉它，别留一条绿色「已完成」
   // （判据与理由在 lib/claude-events.js#isEmptySessionEnd）。

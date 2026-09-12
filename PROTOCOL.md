@@ -43,6 +43,15 @@
 | `Stop` | `done` |
 | `SessionEnd` | `ended`（**空会话例外**：前一条记录仍停在 `SessionStart` 时删除状态文件，见下） |
 
+**别的 agent 起的子进程会话一个字节都不落盘**（2026-09-12 用户需求，实录
+`fixtures/nested-session-facts.md`）：判据是**进程祖先链上除自己这个 claude 外还有第二个
+claude**（`lib/nested-session.js`）。这类会话（`claude -p …` 跑在某个 agent 的 Bash 工具里）
+的 tty 与 pid 都是从父会话**继承**来的，点它会跳到父会话的终端；结束时还会计进「刚办完」。
+比对 comm 的 basename 且**区分大小写**——Claude Desktop App 主进程是大写 `Claude`，
+不区分就会把 App 会话整个误杀。ps 读不出来/链断了/匹配不到 claude 一律按「不是子进程」
+照常显示（fail-open：漏一条是噪音，错删是丢信息）。Task 工具的 subagent 不产生独立会话，
+本来就不在面板上（实测，facts §1）。
+
 **空会话结束时删除状态文件，不许留「已完成」**（2026-09-12 真机缺陷，实录见
 `fixtures/claude-desktop-facts.md` §6）：Claude Desktop App 每开一个会话窗口都会甩出一个
 不到 1 秒的空会话——只有 `SessionStart`→`SessionEnd`，没有提问也没有工具调用。
@@ -186,3 +195,5 @@ IPC 仍是**可关闭的增强通道**（设置里可关，故障自动停用退
 | `PET_AS_CODEX_HOOKS` | Codex CLI hooks 配置 | `$CODEX_HOME/hooks.json`，`CODEX_HOME` 缺省 `~/.codex` |
 | `CODEX_HOME` | Codex 主目录（hooks 配置与 IPC socket 同源认它） | `~/.codex` |
 | `PET_AS_WORKBUDDY_HOME` | WorkBuddy 数据目录（DB 与 serve 心跳文件同源认它） | `~/.workbuddy` |
+| `PET_AS_CLAUDE_APP_SUPPORT` | Claude Desktop App 数据目录（会话元数据：AI 标题与归属） | `~/Library/Application Support/Claude` |
+| `PET_AS_PS_OUTPUT` | 进程表（子进程会话判定用，测试注入实录 ps 输出） | 实跑 `ps -eo pid=,ppid=,tty=,comm=` |

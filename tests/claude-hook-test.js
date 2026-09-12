@@ -421,6 +421,66 @@ test('拿不到前一条记录时不做推断：孤立的 SessionEnd 照旧落 e
     'hook 中途才装 / 目录被清过时，没有证据说明它是空会话——保守写 ended');
 });
 
+// ---- 子进程 agent 会话不进面板（2026-09-12 用户需求，实录 fixtures/nested-session-facts.md）----
+// 进程表经 PET_AS_PS_OUTPUT 注入实录形态，测试不 spawn 真 ps、也不真起嵌套 claude。
+
+// 实录：本会话（99593）的 Bash 工具里跑 `claude -p`，嵌套 claude 是 74691
+const NESTED_PS = [
+  '74691 74690 ?? claude',
+  '74690 74682 ?? timeout',
+  '74682 99593 ?? /bin/zsh',
+  '99593  9762 ttys018 claude',
+  ' 9762  9760 ttys018 -zsh',
+  ' 9760     1 ttys018 /usr/bin/login'
+].join('\n');
+// 同一份实录的上半截被砍掉：只剩一个 claude = 普通终端会话
+const TOP_PS = [
+  '99593  9762 ttys018 claude',
+  ' 9762  9760 ttys018 -zsh',
+  ' 9760     1 ttys018 /usr/bin/login'
+].join('\n');
+
+// hook 的 ppid 由它自己取（process.ppid），测试进程 spawn 出来的 hook 其父就是测试进程；
+// 所以夹具里把"嵌套的那个 claude"的 pid 换成当前测试进程的 pid，链才接得上。
+function psWithSelf(text, selfAsPid) {
+  return text.replace(/^74691 /m, `${process.pid} `).replace(/^99593 /m, selfAsPid ? `${process.pid} ` : '99593 ');
+}
+
+test('子进程 agent 会话（祖先链上还有一个 claude）：一个字节都不落盘', () => {
+  const dir = tmp();
+  const res = runHook(fixtureOf('user-prompt-submit.json'), dir, {
+    PET_AS_PS_OUTPUT: psWithSelf(NESTED_PS, false)
+  });
+  assert.strictEqual(res.status, 0, 'hook 铁律：任何情况都退 0');
+  assert.deepStrictEqual(fs.readdirSync(dir).filter((n) => n.endsWith('.json')), [],
+    '子进程会话不该出现在面板上（跳不过去、也不是用户在跟的任务）');
+});
+
+test('普通终端会话照常落盘（守住"别把真会话删了"这条边）', () => {
+  const dir = tmp();
+  const res = runHook(fixtureOf('user-prompt-submit.json'), dir, {
+    PET_AS_PS_OUTPUT: psWithSelf(TOP_PS, true)
+  });
+  assert.strictEqual(res.status, 0);
+  assert.strictEqual(readOnly(dir).state, 'running');
+});
+
+test('进程表读不出来时保持显示（fail-open，宁可多一条也不错删）', () => {
+  const dir = tmp();
+  runHook(fixtureOf('user-prompt-submit.json'), dir, { PET_AS_PS_OUTPUT: 'ps 挂了' });
+  assert.strictEqual(readOnly(dir).state, 'running');
+});
+
+test('子进程会话的 SessionEnd 同样不落盘，也不去动同名文件', () => {
+  const dir = tmp();
+  // 先由一个普通会话落一条记录（模拟"父会话就叫这个 id"的极端情况不存在，但要证明不误删）
+  runHook(fixtureOf('user-prompt-submit.json'), dir, { PET_AS_PS_OUTPUT: psWithSelf(TOP_PS, true) });
+  const before = readOnly(dir);
+  runHook(fixtureOf('session-end.json'), dir, { PET_AS_PS_OUTPUT: psWithSelf(NESTED_PS, false) });
+  const after = readOnly(dir);
+  assert.deepStrictEqual(after, before, '嵌套会话的事件不许改动已有记录');
+});
+
 // ---- 7. 隔离自证：全程没碰真实状态目录 ----
 test('测试期间未写入真实 ~/.local/state/pet-agent-status', () => {
   assert.deepStrictEqual(leakedTestFiles(), [], '测试数据泄漏进了真实状态目录');
