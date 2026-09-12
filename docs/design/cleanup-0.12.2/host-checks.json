@@ -1098,6 +1098,12 @@
     "pass": true
   },
   {
+    "label": "same panel survives debug reconnect",
+    "actual": 3,
+    "expected": 3,
+    "pass": true
+  },
+  {
     "label": "2 app centered",
     "actual": 160,
     "expected": 160,

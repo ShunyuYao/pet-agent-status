@@ -128,6 +128,10 @@ async function run() {
     }
     for(const b of m.headerButtons){check('header hit width',b.box.w,22);check('header icon width',b.icon.w,13);}
 
+    // A debug transport reconnect must not require the live page to load again.
+    await host.disconnect();
+    check('same panel survives debug reconnect', await host.evaluate('document.querySelectorAll(".app-btn").length'), 3);
+
     // Real detection fixture transitions, rather than assigning panel DOM/state.
     for(const ids of [['claude','workbuddy'],['codex'],[]]){
       host.setApps(ids);

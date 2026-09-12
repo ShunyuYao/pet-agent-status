@@ -27,4 +27,8 @@
 
 E2E覆盖：figma-layout、ui-parity、app-launcher、launcher-completion、dismiss、waiting-accuracy、panel-scroll、panel-open。证据中的失败记录保留在本轮发布审计目录；隐藏测试不声称覆盖原生鼠标穿透或日常外部App的真实激活。
 
-工作分支最终整轮 `npm run test:ui` 通过：21个离线套件、8条隐藏宿主E2E，figma-layout 203/203，panel-open 129ms。
+首轮工作分支整轮 `npm run test:ui` 通过：21个离线套件、8条隐藏宿主E2E，figma-layout 203/203，panel-open 129ms。
+
+首次主分支复核发现：调试连接中途断开后，同一个面板被重复要求发送只触发一次的就绪事件，导致测试超时。新增真实关闭WebSocket后重连的回归路径，修复前稳定超时；helper改为按面板target记录已就绪状态、在宿主重启时清空，修复后同一面板仍显示3个App，figma-layout 204/204。没有改变产品行为或放宽门槛。
+
+重连修复后工作分支再次整轮 `npm run test:ui` 通过：21个离线套件、8条隐藏宿主E2E，figma-layout 204/204，panel-open 133ms，renderer无异常。

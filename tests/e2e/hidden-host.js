@@ -78,7 +78,7 @@ async function start(options = {}) {
   }
   for (const folder of ['panel', 'lib', 'tool', 'assets']) hashTree(path.join(paths.stage, folder), folder);
   writeJson(path.join(artifacts, 'staged-source-sha256.json'), sourceHash);
-  const errors = [], connections = new Map();
+  const errors = [], connections = new Map(), readyPanels = new Set();
   let app, stopping = false, cdpPort, panelReadyLogOffset = 0;
   const harness = { paths, errors, waitFor, panel: null, settings: null, pet: null };
   const rendererEvent = (target, message) => {
@@ -91,7 +91,7 @@ async function start(options = {}) {
   async function connect(target) {
     if (!target) throw new Error('Missing CDP target');
     if (connections.has(target.id)) return connections.get(target.id);
-    if (decodeURIComponent(target.url).includes(manifest.id + '/panel/panel.html')) {
+    if (!readyPanels.has(target.id) && decodeURIComponent(target.url).includes(manifest.id + '/panel/panel.html')) {
       // Each new panel has its own sandbox preload. Attaching Runtime while it
       // initializes can produce binding.startupData=null (recorded in 0.12.2).
       // Consume the next production panel-ready event from this launch's host log
@@ -104,6 +104,9 @@ async function start(options = {}) {
         panelReadyLogOffset = index + marker.length;
         return true;
       }, 'new panel production ready signal');
+      // Transport reconnects keep the same live target; its ready event is sent
+      // only once. Remember readiness independently of the WebSocket lifetime.
+      readyPanels.add(target.id);
     }
     const socket = new WebSocket(target.webSocketDebuggerUrl);
     await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
@@ -131,6 +134,12 @@ async function start(options = {}) {
     return connection;
   }
   harness.cdp = async (method, params = {}, target = harness.panel) => (await connect(target)).send(method, params);
+  harness.disconnect = async (target = harness.panel) => {
+    const connection = connections.get(target.id);
+    if (!connection) return;
+    connection.close();
+    await waitFor(() => !connections.has(target.id), 'debug connection closed');
+  };
   harness.evaluate = async (expression, target = harness.panel) => {
     const result = await harness.cdp('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, target);
     if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || result.exceptionDetails.text);
@@ -182,6 +191,7 @@ async function start(options = {}) {
   process.on('exit', emergencyCleanup);
   async function launch() {
     stopping = false;
+    readyPanels.clear();
     const logOffset = fs.statSync(paths.log).size;
     panelReadyLogOffset = fs.readFileSync(paths.log, 'utf8').length;
     cdpPort = await freePort(); harness.port = cdpPort;
