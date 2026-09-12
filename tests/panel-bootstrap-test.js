@@ -31,6 +31,7 @@ const html = fs.readFileSync(path.join(__dirname, '../panel/panel.html'), 'utf8'
     pet: { bubble() {}, playAnim() {} }, badge: { set: async () => true, clear: async () => {} },
   };
   const collector = createCollector({
+    threadState: { read: () => new Map() },
     dir, locale: 'zh-CN', settingsFile: path.join(dir, 'settings.json'), codexHooksFile: path.join(dir, 'hooks.json'),
     readSnapshots: () => { if (failReads) throw new Error('fixture read unavailable'); return stateFiles.readSnapshots(dir); },
     isPidAlive: () => true, psTree: [],
@@ -77,6 +78,7 @@ const html = fs.readFileSync(path.join(__dirname, '../panel/panel.html'), 'utf8'
     let unblock;
     releaseStartup = new Promise(resolve => { unblock = resolve; });
     const cold = createCollector({
+    threadState: { read: () => new Map() },
       dir, locale: 'zh-CN', psTree: [], settingsFile: path.join(dir, 'settings.json'), codexHooksFile: path.join(dir, 'hooks.json'),
       rolloutActivity: { activeThreads: () => new Map() }, workbuddySource: { tick() {} },
       threadTitles: { lookup: () => null }, terminalTitles: { lookup: () => null },

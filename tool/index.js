@@ -15,6 +15,7 @@ const { createBadgeLink } = require(path.join(LIB, 'badge.js'));
 const deeplink = require(path.join(LIB, 'codex-deeplink.js'));
 const { createCodexIpc } = require(path.join(LIB, 'codex-ipc.js'));
 const { createCodexAppIngest } = require(path.join(LIB, 'codex-app-ingest.js'));
+const { createCodexThreadState } = require(path.join(LIB, 'codex-thread-state.js'));
 const { createRolloutActivity } = require(path.join(LIB, 'codex-rollout-activity.js'));
 const { createWorkbuddySource } = require(path.join(LIB, 'workbuddy-source.js'));
 const { createCodexThreadTitles } = require(path.join(LIB, 'codex-thread-titles.js'));
@@ -101,7 +102,8 @@ function createCollector(deps) {
   // 面板与 Hooks 通道完全不受影响（fixtures/codex-ipc-facts.md §7）。
   // 工厂可注入：测试绝不碰真 socket（默认路径是真实 ~/.codex/ipc/ipc.sock）。
   const ipcFactory = typeof d.createCodexIpc === 'function' ? d.createCodexIpc : createCodexIpc;
-  const ingest = createCodexAppIngest({ dir: d.dir, now });
+  const threadState = d.threadState || createCodexThreadState({ codexHome: d.codexHome });
+  const ingest = createCodexAppIngest({ dir: d.dir, now, turnFor: id => threadState.read([id]).get(id)?.turn || null });
   // rollout 活动探测（PROTOCOL.md「rollout 活动信号」）：App 任务 running 的主信号。
   // 可注入：测试用假目录，绝不 stat 真实 ~/.codex/sessions。
   const rollout = d.rolloutActivity || createRolloutActivity({ codexHome: d.codexHome, now });
@@ -311,15 +313,22 @@ function createCollector(deps) {
   function tick(pet) {
     try {
       const at = now();
+      const before = readSnapshots(d.dir);
       // rollout 活动摄入放在读快照**之前**：本轮写下的 running 本轮就进面板。
       // 与 IPC 增强共用同一开关（关掉增强 = 关掉全部 App 摄入，PROTOCOL.md）。
       // 归属判据（分不清 App/CLI 的活动不落盘）：已有摄入系记录（ingest 内部判）
       // 或 App 正在跟随该线程（following 是纯 App 侧信号）。
       if (ipcEnabled !== false) {
         try {
-          rolloutActive = rollout.activeThreads();
+          const ids = new Set((before.records || []).filter(r => r.agent === 'codex'
+            && (r.source === 'ipc' || r.source === 'reconcile')).map(r => r.threadId || r.sessionId));
+          if (codexIpc) for (const id of codexIpc.followingIds()) ids.add(id);
+          const metadata = threadState.read([...ids]);
+          // Keep missing entries so already discovered paths remain tracked through a DB failure.
+          for (const id of ids) if (!metadata.has(id)) metadata.set(id, {});
+          rolloutActive = rollout.activeThreads(metadata);
           for (const id of rolloutActive.keys()) {
-            ingest.onRolloutActivity(id, (tid) => !!(codexIpc && codexIpc.isFollowing(tid)));
+            ingest.onRolloutActivity(id, (tid) => !!(codexIpc && codexIpc.isFollowing(tid)), metadata.get(id)?.turn || null);
           }
         } catch (_) { rolloutActive = new Map(); }   // 探测挂了不打死采集轮
       } else if (rolloutActive.size) {

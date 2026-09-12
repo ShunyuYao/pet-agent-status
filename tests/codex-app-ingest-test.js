@@ -172,7 +172,7 @@ test('落盘失败（目录是只读文件占位）不抛：摄入绝不打死�
 // 注意：以下用例直调 ingest.onRolloutActivity / onReadState(…, isActive) 不算「直调内部函数自证」——
 // 它们就是模块对外契约面（tool/index.js 生产调用的同名入口），输入是真实 stat 结果的等价物。
 
-test('rollout 活动 + 已有摄入系记录 → running（source reconcile，过协议校验）', () => {
+test('rollout 活动没有新回合证据时保持完成屏障', () => {
   const dir = tmp();
   const r = rig(dir);
   r.feed(turnDoneFrame(CID, true));   // 真实序列：上一回合的 done 记录还在
@@ -180,10 +180,10 @@ test('rollout 活动 + 已有摄入系记录 → running（source reconcile，�
   ingest.onRolloutActivity(CID);      // 不给 canClaim：已有记录本身就是归属证据
   const rec = sf.readStatus(CID, dir);
   assert.strictEqual(sf.validateRecord(rec), null);
-  assert.strictEqual(rec.state, 'running');
-  assert.strictEqual(rec.source, 'reconcile');
+  assert.strictEqual(rec.state, 'done');
+  assert.strictEqual(rec.source, 'ipc');
   assert.strictEqual(rec.form, 'app');
-  assert.strictEqual(rec.lastEvent, 'reconcile:rollout-activity');
+  assert.strictEqual(rec.lastEvent, 'ipc:turn-unread');
 });
 
 test('rollout 活动 + 陌生线程：canClaim=false 一个文件都不落；following 佐证才落', () => {

@@ -141,6 +141,7 @@ function fakeIpcFactory() {
 // 采集器一律注入依赖，绝不落到真实目录/时钟/进程上
 function collectorOn(dir, over) {
   return tool.createCollector(Object.assign({
+    threadState: { read: () => new Map() },
     dir, now: () => T0, isPidAlive: () => true, t,
     createCodexIpc: fakeIpcFactory().factory,
     // 标题解析器必须注入：默认实现会读真实 ~/.codex 线程目录（隔离红线），
@@ -606,11 +607,14 @@ function leakedBackups() {
     sf.writeStatus({ agent: 'codex', form: 'app', sessionId: cid, threadId: cid, cwd: '',
       project: 'Codex App', tty: null, pid: null, state: 'ended', lastEvent: 'ipc:turn-read',
       source: 'ipc', ts: T0 - 60000 }, dir);
+    const data = require('./fixtures/codex-state-data').createData(home, cid);
+    data.turn('00000000-0000-4000-8000-000000000101', 'inProgress', T0 - 3000);
     const f = fakeIpcFactory();
     const { createRolloutActivity } = require(path.join(ROOT, 'lib', 'codex-rollout-activity.js'));
     const m = mockPet();
     const c = collectorOn(dir, {
       now: () => clock, createCodexIpc: f.factory,
+      threadState: require('../lib/codex-thread-state').createCodexThreadState({ codexHome: home }),
       rolloutActivity: createRolloutActivity({ codexHome: home, now: () => clock }),
       workbuddySource: { tick: () => {} }
     });
@@ -626,6 +630,8 @@ function leakedBackups() {
     // 活动停止（时钟越过 30s 窗）后 tick 一轮清活动集，已读帧才照常收尾
     clock = T0 + 60000;
     c.tick(m.pet);
+    data.turn('00000000-0000-4000-8000-000000000101', 'completed', T0 - 3000, 1, clock);
+    data.close();
     f.instances[0].deps.onReadState(cid, false);
     assert.strictEqual(sf.readStatus(cid, dir).state, 'ended', '活动停了，已读该照常转 ended');
     await c.stop(m.pet);

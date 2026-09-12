@@ -1,4 +1,4 @@
-# 状态文件协议 schema:1（冻结）
+# 状态文件协议 schema:2（冻结）
 
 > 改协议 = 升 `schema` 并保持向后兼容读取；先改本文件再改代码。
 
@@ -9,11 +9,11 @@
 - **写入必须原子**：同目录写临时文件（`.tmp-` 前缀）后 `rename` 覆盖。
 - 会话正常结束（SessionEnd/退出）：hook 把 `state` 置 `ended` 并保留文件；采集器把 `ended` 视为 done 的终态展示后按 idle 淡出规则移除展示（文件由采集器在超过 24h 后清理）。
 
-## 字段（schema:1）
+## 字段（schema:2；兼容读取 schema:1）
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `schema` | number | 是 | 恒 `1` |
+| `schema` | number | 是 | 新写入恒 `2`；读取接受 `1`、`2` |
 | `agent` | `'claude-code'`\|`'codex'`\|`'workbuddy'` | 是 | 会话来源厂牌（`'workbuddy'` 为 2026-09-12 加法，旧读者对未知厂牌按损坏跳过——可接受：旧版本插件本就不会有 workbuddy 写入方） |
 | `sessionId` | string | 是 | 会话唯一 id（Claude Code 用 hook 输入的 `session_id`） |
 | `cwd` | string | 是 | 会话工作目录（绝对路径） |
@@ -23,11 +23,12 @@
 | `state` | string | 是 | `running`\|`waiting`\|`done`\|`ended`（推导态 error/idle/unknown 只在采集器内存与面板，不落盘） |
 | `lastEvent` | string | 是 | 产生本次写入的原始事件名（如 `UserPromptSubmit`/`Notification`/`Stop`） |
 | `ts` | number | 是 | 本次写入的 Unix 毫秒 |
+| `turnId` | string | 否 | schema:2 新增：Codex App 当前回合 UUID。用于完成屏障与重启恢复；CLI/hook 不必写。旧记录无此字段时，新回合开始时间必须严格晚于旧记录 `ts` 才可从终态恢复运行。 |
 | `threadId` | string | 否 | Codex 线程 id（UUID，供 `codex://threads/<id>` 深链接） |
 | `source` | `'hook'`\|`'ipc'`\|`'reconcile'`\|`'poll'` | 否 | 数据来源，hook 写入缺省为 `'hook'`；`'poll'` = WorkBuddy SQLite 轮询（2026-09-12 加法） |
-| `form` | `'cli'`\|`'app'` | 否 | 会话形态；缺省按 `'cli'` 读。`'app'` = Codex App 任务（2026-09-11 起由 IPC 摄入写入；schema 仍为 1——选填字段做加法，旧读者按未知字段忽略，不破坏向后兼容） |
+| `form` | `'cli'`\|`'app'` | 否 | 会话形态；缺省按 `'cli'` 读。`'app'` = Codex App 任务（2026-09-11 起由 IPC 摄入写入；最早作为 schema:1 的选填字段引入，schema:2 继续保留） |
 | `title` | string | 否 | 会话标题兜底（US-9，schema:1 加法）。hook 在 `UserPromptSubmit` 时取 `prompt` **首个非空行、64 码点截断**写入；**首见定名**——同会话后续写入保留既有 title，不随后续 prompt 改名。这是「不采集会话正文」纪律的显式让步，边界即上述两条：只许首行 + 截断，任何路径都不许落完整 prompt。展示层优先级：Codex 线程目录 AI 标题 > 终端标签标题（两者均采集器现查、不落盘，见 fixtures/terminal-titles-facts.md）> 本字段 > `project` |
-| `since` | number | 否 | **活跃段起点**（Unix 毫秒）：本会话这一轮进入活跃组（`running`/`waiting`）的时刻。由 `writeStatus` 维护：前一记录也在活跃组则继承（工具调用、批准后恢复都不重置），否则等于本次 `ts`。面板 `mm:ss` 计时用它；陈旧/error/idle 推导仍用 `ts`（最后心跳）。缺省读者回退 `ts`（schema:1 加法，2026-09-11 修「工具调用把计时归零」缺陷时引入） |
+| `since` | number | 否 | **活跃段起点**（Unix 毫秒）：本会话这一轮进入活跃组（`running`/`waiting`）的时刻。由 `writeStatus` 维护：前一记录也在活跃组且没有明确切换 turnId 则继承（工具调用、批准后恢复都不重置；明确的新回合重新计时），否则等于本次 `ts`。面板 `mm:ss` 计时用它；陈旧/error/idle 推导仍用 `ts`（最后心跳）。缺省读者回退 `ts`（schema:1 加法，2026-09-11 修「工具调用把计时归零」缺陷时引入） |
 
 未知字段读取时忽略不报错；缺必填字段的文件按损坏跳过（不 crash 采集器）。
 
@@ -120,25 +121,28 @@ App 任务与 CLI 会话在协议上同构，差别有三处：
 摄入保护：同 `sessionId` 已存在 `source` 非 `'ipc'` 的记录（CLI hooks 写的，含 tty 更富）时，
 IPC 摄入**跳过不覆盖**。IPC 记录的清理走既有 idle 淡出与 24h 文件清理，无独立生命周期。
 
-### rollout 活动信号 → running（source:'reconcile'，2026-09-11 修「运行中看不到 App 任务」缺陷引入）
+### rollout 活动与回合屏障（source:'reconcile'，2026-09-12 修订）
 
-running 的主信号不再来自 IPC 广播，而是线程 rollout 文件的新鲜度（facts §10.2）：
-`$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<时间戳>-<threadId>.jsonl` 在任务运行期间每隔
-约 2–12 秒持续追加，文件名自带 threadId，无需读内容。
-
-- **判据（三条同时成立才写）**：① rollout 文件 mtime 距今 ≤ 30s；② 该 threadId **不属于**
-  hook 系记录（同 sessionId 已有 `source` 非 `'ipc'`/`'reconcile'` 的记录 = CLI hooks 在管，跳过）；
-  ③ 该线程已有摄入系记录（ipc/reconcile 写过）**或** 正被 App 跟随（following 信号）——
-  App 与 CLI 共用 sessions 目录，缺这条会把没装 hooks 的 CLI 会话误标成 App 任务。
-- 写入内容同 App 摄入（`form:'app'`、tty null、品牌名 project），`source:'reconcile'`、
-  `lastEvent:'reconcile:rollout-activity'`。
-- **兼作心跳**：活动持续期间按节流（≥20s）刷新记录 `ts`，使长任务不落入采集器 3min
-  stale→unknown 兜底；`since` 继承规则不变（mm:ss 连续计时）。
-- 摄入可写性判据由「existing.source === 'ipc'」放宽为「∈ {'ipc','reconcile'}」：
-  两者同属 App 摄入系，IPC 的 done/ended 必须能覆盖 reconcile 写的 running。
-- 扫描只读、全失败路径静默降级（内部存储无稳定性承诺，同标题读取纪律）；只扫今天与昨天
-  两个日期目录（覆盖跨午夜边界），不递归全库。
-- 与 IPC 增强共用同一开关（storage 键 `codexIpcEnabled`）：关掉增强 = 关掉全部 App 摄入。
+- 运行活动仍只读取 rollout 的文件名与 stat，不读取会话正文。mtime 距今 ≤30s
+  是心跳候选，**不是**完成后重新运行的充分条件。
+- 每轮只读 `thread_history_1.sqlite.thread_turns` 的最新回合编号、状态、起止时间
+  （按 rollout_ordinal 排序）。只认 `inProgress/completed/failed/interrupted`；未知值
+  不作活动证据，不读取 error_json、thread_items 或其他正文列。
+- 收到 IPC 完成事件时写 done，并记录可用的最新 `turnId`。已完成/已结束的记录，
+  只有明确的**不同回合**且状态为 `inProgress` 才能由 rollout 恢复 running。
+  同一回合收尾写入、mtime 不变、插件重启均不能穿过该屏障。
+- 对 schema:1 或尚无 turnId 的终态记录，需最新 inProgress 回合的 started_at
+  严格晚于记录 ts 才允许恢复。数据库缺失/锁住/schema 漂移时保持终态，
+  不凭 mtime 猜新回合；已验证的 IPC 活动事件仍可作为降级来源。
+- 最新回合已经 completed/failed/interrupted 时，不再以 rollout 给 running 续心跳。
+  数据库只用于活动核验，**不把数据库状态映射成 done**；完成仍由已验证的 IPC 事件确认。
+- 归属保护不变：已有 ipc/reconcile 记录或 App following，且不可覆盖 hook 来源。
+- 运行期间 ≥20s 刷新 ts，since 继承规则不变；心跳仅延续运行态。
+- 近期目录用于发现文件；另对已有 App 记录/following 线程，从
+  `state_5.sqlite.threads` 按 id 只读 rollout_path，缓存并直接 stat，以支持旧任务。
+  路径必须位于当前 CODEX_HOME/sessions 内、文件名 UUID 匹配，拒绝符号链接逃逸。
+  查不到路径时继续使用近期发现的路径，不每轮递归历史目录。
+- 与 IPC 增强共用 codexIpcEnabled 开关；失败不影响 CLI 与面板。
 
 IPC 仍是**可关闭的增强通道**（设置里可关，故障自动停用退回 Hooks）；
 未实录确认语义的事件一律忽略，**绝不映射成 done**（见 `fixtures/codex-ipc-facts.md` §5/§8）。

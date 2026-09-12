@@ -224,7 +224,7 @@ test('落盘记录字段集合恰好是 PROTOCOL.md 字段表（含 threadId，�
   runFixture('session-start.json', dir);
   const rec = readOnly(dir);
 
-  assert.strictEqual(rec.schema, 1);
+  assert.strictEqual(rec.schema, 2);
   assert.strictEqual(rec.agent, 'codex');
   assert.strictEqual(rec.sessionId, fx.session_id);
   assert.strictEqual(rec.cwd, fx.cwd);
@@ -698,6 +698,7 @@ test('端到端：codex hook 写入 → tool 采集 → panel 渲染出 codex �
   const actualTty = readOnly(dir).tty;
   const ttyName = (actualTty || '/dev/ttys007').replace(/^\/dev\//, '');
   const collector = tool.createCollector({
+    threadState: { read: () => new Map() },
     dir,
     now: () => T0,
     isPidAlive: () => true,
@@ -779,6 +780,7 @@ test('端到端：带 tty 的 codex 行点击 → tool 真的尝试跳转，失�
   const ITERM = '/Applications/iTerm.app/Contents/MacOS/iTerm2';
   let runnerCalls = 0;
   const collector = tool.createCollector({
+    threadState: { read: () => new Map() },
     dir, now: () => T0, isPidAlive: () => true, locale: 'zh-CN',
     threadTitles: { lookup: () => null }, rolloutActivity: { activeThreads: () => new Map() }, workbuddySource: { tick: () => {} },   // 隔离：默认实现读真实 ~/.codex
     terminalTitles: { lookup: () => null },   // 隔离：默认实现 spawn osascript 查真实终端
@@ -833,6 +835,7 @@ test('端到端：点 Codex 接入 → tool 真写临时 hooks.json → 面板�
   const dom = new JSDOM(html, { runScripts: 'dangerously', beforeParse(w) { w.pet = petPanel; } });
 
   const collector = tool.createCollector({
+    threadState: { read: () => new Map() },
     dir: tmp(), now: () => T0, isPidAlive: () => true, locale: 'zh-CN',
     threadTitles: { lookup: () => null }, rolloutActivity: { activeThreads: () => new Map() }, workbuddySource: { tick: () => {} },   // 隔离：默认实现读真实 ~/.codex
     terminalTitles: { lookup: () => null },   // 隔离：默认实现 spawn osascript 查真实终端
@@ -917,7 +920,7 @@ test('PROTOCOL.md 只增不改：Claude Code 映射表七行原样在位', () =>
     assert.ok(line, `Claude Code 表少了 ${ev} 这一行`);
     assert.ok(line.includes(`\`${st}\``), `Claude Code 表的 ${ev} 被改动了：${line}`);
   }
-  assert.strictEqual(md.includes('schema:1'), true, 'schema 版本不该被动');
+  assert.strictEqual(md.includes('schema:2'), true, '写入协议版本应与实现一致');
 });
 
 test('测试全程未触碰真实 ~/.codex 与真实状态目录', () => {

@@ -477,6 +477,7 @@ function makeTool(dir, over) {
     pet: { bubble() {}, playAnim() {} }
   };
   const collector = tool.createCollector(Object.assign({
+    threadState: { read: () => new Map() },
     dir, now: () => T0, isPidAlive: () => true, locale: 'zh-CN',
     settingsFile: path.join(dir, 'settings.json'),
     rolloutActivity: { activeThreads: () => new Map() },   // 隔离：默认实现 stat 真实 ~/.codex/sessions

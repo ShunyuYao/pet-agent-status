@@ -141,3 +141,22 @@
   **仅凭 rollout 新鲜度分不出 App/CLI**——归属需叠加其它证据
   （已有 ipc 系记录、或 App 的 following 信号）。
 - 内部存储、无稳定性承诺：消费必须全失败路径静默降级（同 §9 标题读取的纪律）。
+
+
+## 11. 2026-09-12 完成覆盖复现与回合元数据【实录 + 隔离宿主复现】
+
+- 本机安装版 0.12.1 与当时 main 的三个 Codex 检测模块逐字节一致。
+- 原实现隐藏真宿主复现：完成落盘后约 1.8s，在 rollout mtime 未变化时又变 running。
+  先验证无新鲜 rollout 的对照组完成消息能到达面板，再加入活动文件复现，排除取证通道失效。
+- 只读检查 `thread_history_1.sqlite.thread_turns`，发现明确的 turn_id、status、started_at、
+  completed_at、rollout_ordinal 列。当前本任务最新回合为 inProgress，前两轮为 completed，
+  与本会话已知执行/结束事实相符。时间字段为 Unix 秒。未读取消息表或 error_json。
+- 只读检查 `state_5.sqlite.threads` 有 id→rollout_path，可定点定位旧任务；不需要递归历史库。
+- 本机 status 取值有 inProgress/completed/failed/interrupted。后两者本轮仅观察到存储值，
+  未做失败/中断受控实验，故不映射用户可见完成状态；其他值亦不猜。
+- SQLite 内部投影与 IPC 之间没有已证实的同步时序保证。因此新实现把 IPC 完成时所见
+  turnId 写入状态文件，随后同一回合即使仍显示 inProgress、文件继续追加或宿主重启，
+  也不能恢复 running；需要明确的新 inProgress 回合。无法查到元数据时保守保持终态。
+- 完成仍只认原已验证的 IPC true，不以数据库里的历史 completed 主动新增完成任务。
+- 回归入口：`test:codex-state` 与 `test:codex-state-e2e`。所有输入均为临时 SQLite 元数据、
+  临时 rollout 文件活动和真实形态 IPC 帧；真宿主含完成气泡、面板、徽标与重启路径。

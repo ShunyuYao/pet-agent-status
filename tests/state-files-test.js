@@ -25,7 +25,7 @@ function test(name, fn) {
   console.log(`  ok  ${name}`);
 }
 
-// ---- 1. 写入产出的 JSON 逐字段符合 PROTOCOL.md schema:1 ----
+// ---- 1. 写入产出的 JSON 逐字段符合 PROTOCOL.md schema:2 ----
 test('writeStatus 落盘字段与 PROTOCOL.md 一致', () => {
   const dir = tmp();
   const before = Date.now();
@@ -40,7 +40,7 @@ test('writeStatus 落盘字段与 PROTOCOL.md 一致', () => {
   }, dir);
 
   const rec = JSON.parse(fs.readFileSync(file, 'utf8'));
-  assert.strictEqual(rec.schema, 1);
+  assert.strictEqual(rec.schema, 2);
   assert.strictEqual(rec.agent, 'claude-code');
   assert.strictEqual(rec.sessionId, 'abc-123');
   assert.strictEqual(rec.cwd, '/Users/me/projects/demo');
@@ -375,6 +375,24 @@ test('title 选填字段：首行清洗 + 码点截断 + 首见定名 + 读回�
   const legacy = Object.assign({}, record);
   delete legacy.title;
   assert.strictEqual(sf.validateRecord(legacy), null, '没有 title 的旧记录必须继续可读');
+});
+
+test('schema:2 回合编号落盘、旧版本兼容、新回合重新计时、损坏编号拒读', () => {
+  const dir = tmp();
+  const first = '00000000-0000-4000-8000-000000000101';
+  const second = '00000000-0000-4000-8000-000000000102';
+  const input = {agent:'codex',sessionId:'turns',state:'running',lastEvent:'reconcile:rollout-activity',turnId:first,ts:1000};
+  sf.writeStatus(input, dir); sf.writeStatus({...input,ts:2000}, dir);
+  assert.strictEqual(sf.readStatus('turns', dir).since, 1000);
+  sf.writeStatus({...input,turnId:second,ts:3000}, dir);
+  assert.strictEqual(sf.readStatus('turns', dir).since, 3000);
+  assert.strictEqual(sf.readStatus('turns', dir).turnId, second);
+  const file = path.join(dir,'turns.json'); const rec = sf.readStatus('turns', dir);
+  assert.strictEqual(rec.schema, 2);
+  fs.writeFileSync(file, JSON.stringify({...rec,schema:1,turnId:undefined}));
+  assert.strictEqual(sf.readStatus('turns',dir).state, 'running');
+  fs.writeFileSync(file, JSON.stringify({...rec,turnId:'invalid'}));
+  assert.strictEqual(sf.readStatus('turns',dir), null);
 });
 
 for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });

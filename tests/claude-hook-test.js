@@ -95,7 +95,7 @@ test('落盘记录字段齐全且符合 PROTOCOL.md schema:1', () => {
   runFixture('user-prompt-submit.json', dir);
   const rec = readOnly(dir);
 
-  assert.strictEqual(rec.schema, 1);
+  assert.strictEqual(rec.schema, 2);
   assert.strictEqual(rec.agent, 'claude-code');
   assert.strictEqual(rec.sessionId, fx.session_id);
   assert.strictEqual(rec.cwd, fx.cwd);

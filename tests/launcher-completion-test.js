@@ -26,6 +26,7 @@ const { writeStatus } = require('../lib/state-files');
     tty: '/dev/ttys901', pid: null, state: 'done', lastEvent: 'Stop', ts: at - 2000, ...patch });
   try {
     collector = tool.createCollector({
+    threadState: { read: () => new Map() },
       dir, now: () => at, isPidAlive: () => true,
       settingsFile: path.join(dir, 'claude-settings.fixture'), codexHooksFile: path.join(dir, 'codex-hooks.fixture'),
       threadTitles: { lookup: () => null }, terminalTitles: { lookup: () => null },

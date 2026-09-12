@@ -760,7 +760,7 @@ test('tool 真的把 locale 随快照发出来（不是 panel 自说自话）', 
   };
   const dir = tmp();
   sf.writeStatus(rec({ sessionId: 'a', ts: T0 }), dir);
-  const c = tool.createCollector({ dir, locale: 'zh-CN', now: () => T0, isPidAlive: () => true, createCodexIpc: fakeIpc , threadTitles: { lookup: () => null }, terminalTitles: { lookup: () => null }, rolloutActivity: { activeThreads: () => new Map() }, workbuddySource: { tick: () => {} } });
+  const c = tool.createCollector({ threadState: { read: () => new Map() }, dir, locale: 'zh-CN', now: () => T0, isPidAlive: () => true, createCodexIpc: fakeIpc , threadTitles: { lookup: () => null }, terminalTitles: { lookup: () => null }, rolloutActivity: { activeThreads: () => new Map() }, workbuddySource: { tick: () => {} } });
   c.tick(petSide);
   const snap = emitted.find((e) => e.name === tool.SNAPSHOT_EVENT).data;
   assert.strictEqual(snap.locale, 'zh-CN', 'tool 没把 locale 随快照下发');
@@ -828,7 +828,7 @@ const pending = testAsync('端到端：点接入 → tool 真写 settings.json �
   };
 
   // panel 侧的 pet mock：emit 转投 tool 的 handler
-  const collector = tool.createCollector({ dir, settingsFile, now: () => T0, isPidAlive: () => true, createCodexIpc: fakeIpc , threadTitles: { lookup: () => null }, terminalTitles: { lookup: () => null }, rolloutActivity: { activeThreads: () => new Map() }, workbuddySource: { tick: () => {} } });
+  const collector = tool.createCollector({ threadState: { read: () => new Map() }, dir, settingsFile, now: () => T0, isPidAlive: () => true, createCodexIpc: fakeIpc , threadTitles: { lookup: () => null }, terminalTitles: { lookup: () => null }, rolloutActivity: { activeThreads: () => new Map() }, workbuddySource: { tick: () => {} } });
 
   panel = mountPanel();
   // 把 panel 的 emit 接到 tool 上（mountPanel 的 mock 只记流水，这里补上转发）
