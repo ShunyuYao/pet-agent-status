@@ -68,9 +68,21 @@ Figma：`UJimpWGl2hGkrbzxIVCAK5` 第 ⑤ 区（y≈1920 起）
 复用既有 `nodeAccess` 的 `child_process` spawn `open`（README 权限披露第 3 行已声明
 "`open -b` 把 Claude App 提到前台"）。**不需要新增 SDK 面，不需要 openExternal。**
 
+## 实现落地（0.11.0）
+
+- `lib/app-launcher.js`：登记表（id/bundleId/name）+ 探测（mdfind 按 bundleId，5min 缓存）
+  + `open()`（只认登记表 id，bundleId 绝不来自调用方）+ `runningFromRows()`
+- `tool/index.js`：每轮 tick 推 `agent-status:apps`（已过滤数组），订阅 `agent-status:open-app`
+- `panel/panel.html`：底栏渲染 + 空数组整条 hidden
+- `lib/badge.js`：`segmentsFor` 空态改返回 `[{tone:'muted',text:''}]`（不再 null）
+
+**图标必须是真实彩色 App 图标**（`assets/app-*.png` 的内联 data URI），
+不是会话行那套单色厂牌 SVG —— 后者是「哪个厂牌的会话」，底栏是「打开哪个 App」，
+语义与画法都不同。首版用错了素材，尺寸间距全对但长得不是设计稿，见 AGENTS.md 设计红线。
+
 ## 待拍板
 
 ① 小标题已删（见底栏度量）。代价＝新手不知道会话行可点；若要补，
    建议放图标行右侧一句极短灰字，而不是恢复左上小标题
-② 图标顺序固定 vs「有会话的排前面」（动态排序会跳动，倾向固定）
-③ Codex 点击打开 ChatGPT.app 是否符合预期；若要的是 Codex CLI，那是终端不是 App，需另定义
+② ~~图标顺序~~ **已定：固定 claude→codex→workbuddy**（动态排序位置会跳，毁肌肉记忆）
+③ ~~Codex 打开 ChatGPT.app~~ **已定：符合预期**（用户 2026-09-12 确认）

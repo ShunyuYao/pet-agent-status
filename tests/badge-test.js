@@ -3,7 +3,9 @@
 //
 // 需求条件 → 断言（PRD docs/prd-pet-badge-sdk.md US-B03，先断言后实现）：
 //   ① summary → segments 映射：waiting→warning 段、running→primary 段，waiting 恒排最左
-//   ② 无会话 → clear，不留空徽标
+//   ② 无会话 → **常驻空徽标**（1 段 muted + 空文本），不 clear
+//      （0.11.0 反转：原来是 clear，导致宠物脚下唯一的会话入口整个消失，
+//       见 docs/design-launcher-proposal.md 改动①）
 //   ③ onClick 恒为 'openPanel'
 //   ④ 变化才发：同一份 summary 不重复 set（tick 是 2s 一轮，每轮都发＝每 2s 一次跨进程 IPC）
 //   ⑤ 旧宿主（无 pet.badge）静默降级，不抛异常、不打断采集
@@ -68,10 +70,13 @@ function makePet() {
       [{ tone: 'warning', text: '1' }, { tone: 'primary', text: '3' }]);
   });
 
-  await test('无会话 → null（上层据此 clear）', () => {
-    assert.strictEqual(segmentsFor({ waiting: 0, running: 0 }), null);
-    assert.strictEqual(segmentsFor({ waiting: 0, running: 0, done: 0 }), null);
-    assert.strictEqual(segmentsFor(null), null);
+  await test('无会话 → 常驻空徽标（1 段 muted + 空文本），不是 null', () => {
+    const idle = [{ tone: 'muted', text: '' }];
+    assert.deepStrictEqual(segmentsFor({ waiting: 0, running: 0 }), idle);
+    assert.deepStrictEqual(segmentsFor({ waiting: 0, running: 0, done: 0 }), idle);
+    assert.deepStrictEqual(segmentsFor(null), idle, '连 summary 都没有也要留住入口');
+    // 宿主 normalizeBadgeSegments 拒 length<1，所以**必须**是 1 段而不是 0 段
+    assert.strictEqual(segmentsFor({ waiting: 0, running: 0 }).length, 1);
   });
 
   await test('段文本 ≤4 字符（宿主硬限，超了整条 set 会被拒）', () => {
@@ -113,16 +118,20 @@ function makePet() {
     assert.strictEqual(m.calls.filter((c) => c[0] === 'set').length, 2);
   });
 
-  // ② 空态
-  await test('从有会话到无会话：clear 一次，且不反复 clear', async () => {
+  // ② 空态：徽标常驻，绝不 clear（0.11.0 反转）
+  await test('从有会话到无会话：set 成空徽标，绝不 clear（入口必须留着）', async () => {
     const m = makePet();
     const link = createBadgeLink();
     await link.onSummary({ waiting: 0, running: 1 }, m.pet);
     const r1 = await link.onSummary({ waiting: 0, running: 0 }, m.pet);
     const r2 = await link.onSummary({ waiting: 0, running: 0 }, m.pet);
-    assert.strictEqual(r1, 'clear');
-    assert.strictEqual(r2, 'skip');
-    assert.strictEqual(m.calls.filter((c) => c[0] === 'clear').length, 1);
+    assert.strictEqual(r1, 'set', '空态是 set 一个空徽标，不是 clear');
+    assert.strictEqual(r2, 'skip', '同样的空态不重复发');
+    assert.strictEqual(m.calls.filter((c) => c[0] === 'clear').length, 0,
+      'onSummary 路径永远不该 clear —— clear 只属于 dispose');
+    // 空徽标仍然可点（用户没会话时也要能点开面板看看）
+    const lastSet = m.calls.filter((c) => c[0] === 'set').pop();
+    assert.strictEqual(lastSet[1].onClick, 'openPanel');
   });
 
   // ⑤ 旧宿主降级

@@ -24,6 +24,7 @@ const { createNodeI18n } = require(path.join(LIB, 'i18n.js'));
 const installer = require(path.join(LIB, 'claude-hooks-installer.js'));
 const codexInstaller = require(path.join(LIB, 'codex-hooks-installer.js'));
 const terminalJump = require(path.join(LIB, 'terminal-jump.js'));
+const appLauncher = require(path.join(LIB, 'app-launcher.js'));
 
 const TICK_MS = 2000;                            // 宿主把最小间隔钳到 1000ms，2s 满足「3 秒内可感知」
 // 事件名带前缀防撞（AGENTS.md 惯例）。这一组与 panel/panel.html 里的常量是**两份副本**，
@@ -39,6 +40,8 @@ const UNINSTALL_CODEX_EVENT = 'agent-status:uninstall-codex';   // panel → too
 const JUMP_EVENT = 'agent-status:jump';                         // panel → tool：跳回终端意图
 const SETTINGS_STATE_EVENT = 'agent-status:settings-state';     // tool → panel：设置视图状态
 const SET_SETTING_EVENT = 'agent-status:set-setting';           // panel → tool：改设置意图
+const APPS_EVENT = 'agent-status:apps';                         // tool → panel：本机装了哪些 App
+const OPEN_APP_EVENT = 'agent-status:open-app';                 // panel → tool：打开 App 意图
 
 // 设置的唯一真相源：pet.storage 的这个键。**默认开**（没存过值 = true）；
 // 只有显式存过 false 才算关。刻意不用 manifest entry.settings —— 那份值只有宿主设置页
@@ -87,6 +90,10 @@ function createCollector(deps) {
   }
   const link = createPetLink({ playAnimGuard: d.playAnimGuard });
   const badgeLink = createBadgeLink();
+  // App 启动器（底栏一排图标）。工厂可注入：测试绝不 spawn 真的 mdfind/open。
+  const launcher = typeof d.createAppLauncher === 'function'
+    ? d.createAppLauncher({ now })
+    : appLauncher.createAppLauncher({ now });
   // Codex App 实时增强（**默认开**，storage 键 IPC_ENABLED_KEY，panel 设置视图可关）。
   // 两条增益：① App 任务摄入为状态文件（codex-app-ingest，映射表冻结在 PROTOCOL.md）；
   // ② following 信号进 focus 同级优先。连不上/协议变了会自己停用，
@@ -358,6 +365,7 @@ function createCollector(deps) {
       // 哪怕钩子早就装好了。读一个小 JSON，2s 一次的开销可以忽略。
       pushInstallState(pet);
       pushSettingsState(pet);   // 设置视图同理随开随关，每轮都给
+      pushApps(pet, result.rows);   // 底栏 App 启动器（探测有 5min 缓存，不是每轮 spawn）
       link.onSnapshot(result.rows, pet, { now: at, t });
       // 折叠徽标（宿主 pet.badge.*）：数据取自同一份 summary，协议零改动。
       // 不 await：徽标失败不该拖慢/打断本轮采集，内部已自带 try/catch 与降级。
@@ -379,6 +387,28 @@ function createCollector(deps) {
     // 两个厂牌各一个开关，panel 各画各的（载荷仍是同一个事件，加字段不改契约）
     emit(pet, INSTALL_STATE_EVENT, { claude, codex });
     return { claude, codex };
+  }
+
+  // 本机装了哪些 App → panel。载荷是**已过滤**的数组：没装的整条不在里面，
+  // 一个都没装就是空数组（panel 据此整条不渲染 footer，连分隔线一起）。
+  // running 取自同一份快照的 agent 字段，零新增采集。
+  function pushApps(pet, rows) {
+    let apps = [];
+    try {
+      apps = launcher.detect({ running: appLauncher.runningFromRows(rows) });
+    } catch (_) {
+      apps = [];   // 探测整体失败 = 当作没装，面板少个便捷入口而已，绝不打断采集
+    }
+    emit(pet, APPS_EVENT, { apps });
+    return apps;
+  }
+
+  // 打开 App 意图。**appId 只当索引用**：真正进 `open -b` 的 bundleId 由
+  // app-launcher 从自己的登记表取，绝不采信 panel 传来的字符串（同访客窗
+  // 「收件人由主进程查登记」的精神）。
+  function handleOpenApp(pet, data) {
+    const id = data && data.appId;
+    try { launcher.open(id); } catch (_) { /* 已在模块内兜住，这里再收一道 */ }
   }
 
   function handleInstall(pet) {
@@ -412,6 +442,7 @@ function createCollector(deps) {
     subscribe(pet, INSTALL_CODEX_EVENT, () => handleInstallCodex(pet));
     subscribe(pet, UNINSTALL_CODEX_EVENT, () => handleUninstallCodex(pet));
     subscribe(pet, JUMP_EVENT, (data) => handleJump(pet, data));
+    subscribe(pet, OPEN_APP_EVENT, (data) => handleOpenApp(pet, data));
     subscribe(pet, SET_SETTING_EVENT, (data) => { void handleSetSetting(pet, data); });
     // 语言以 renderer 的 navigator.language 为准（tool 进程的 LANG 不代表界面语言，
     // 实测会把中文用户判成 en）。panel 首次发现分歧时报上来，这里换表并立即重推一轮。
@@ -491,5 +522,6 @@ module.exports = {
   SNAPSHOT_EVENT, LOCALE_EVENT, INSTALL_STATE_EVENT, INSTALL_CLAUDE_EVENT, UNINSTALL_CLAUDE_EVENT,
   INSTALL_CODEX_EVENT, UNINSTALL_CODEX_EVENT,
   JUMP_EVENT, JUMP_ERROR_TTL_MS,
-  SETTINGS_STATE_EVENT, SET_SETTING_EVENT, IPC_ENABLED_KEY
+  SETTINGS_STATE_EVENT, SET_SETTING_EVENT, IPC_ENABLED_KEY,
+  APPS_EVENT, OPEN_APP_EVENT
 };
