@@ -40,11 +40,25 @@ async function test(name, fn) {
   }
 }
 
+// 夹具默认**每个会话一个终端窗口**：同一个 tty 上的旧会话会被同窗顶替规则收起
+// （lib/aggregate.js#supersedeSameTerminal，2026-09-12），而这些用例测的是状态推导/
+// 排序/汇总，会话之间本就互相独立。要测同窗行为的用例请显式传同一个 tty。
+function ttyFor(sessionId) {
+  const s = String(sessionId == null ? '' : sessionId);
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 900;
+  return `/dev/ttys${String(h + 100)}`;
+}
 function rec(over) {
-  return Object.assign({
+  const o = over || {};
+  const base = {
     agent: 'claude-code', sessionId: 's', cwd: '/Users/me/projects/demo',
-    tty: '/dev/ttys001', pid: 4242, state: 'running', lastEvent: 'UserPromptSubmit', ts: T0
-  }, over);
+    pid: 4242, state: 'running', lastEvent: 'UserPromptSubmit', ts: T0
+  };
+  const merged = Object.assign(base, o);
+  // 没显式给 tty 的话按 sessionId 各分一个窗口（见 ttyFor 注释）
+  if (!('tty' in o)) merged.tty = ttyFor(merged.sessionId);
+  return merged;
 }
 
 /**

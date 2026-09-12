@@ -38,11 +38,25 @@ function seed(dir, recs) {
   for (const r of recs) sf.writeStatus(r, dir);
   return sf.readSnapshots(dir);
 }
+// 夹具默认**每个会话一个终端窗口**：同一个 tty 上的旧会话会被同窗顶替规则收起
+// （lib/aggregate.js#supersedeSameTerminal，2026-09-12），而这些用例测的是状态推导/
+// 排序/汇总，会话之间本就互相独立。要测同窗行为的用例请显式传同一个 tty。
+function ttyFor(sessionId) {
+  const s = String(sessionId == null ? '' : sessionId);
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 900;
+  return `/dev/ttys${String(h + 100)}`;
+}
 function rec(over) {
-  return Object.assign({
+  const o = over || {};
+  const base = {
     agent: 'claude-code', sessionId: 's', cwd: '/Users/me/projects/demo',
-    tty: '/dev/ttys001', pid: 4242, state: 'running', lastEvent: 'UserPromptSubmit', ts: T0
-  }, over);
+    pid: 4242, state: 'running', lastEvent: 'UserPromptSubmit', ts: T0
+  };
+  const merged = Object.assign(base, o);
+  // 没显式给 tty 的话按 sessionId 各分一个窗口（见 ttyFor 注释）
+  if (!('tty' in o)) merged.tty = ttyFor(merged.sessionId);
+  return merged;
 }
 function run(snapshot, over) {
   return agg.aggregate(snapshot, Object.assign({ now: T0, isPidAlive: () => true, t }, over));
@@ -235,7 +249,8 @@ test('非 waiting 行只按 ts 降序，与状态无关（error 不因是 error 
 
 test('行结构含 panel 渲染所需全部字段', () => {
   const dir = tmp();
-  const snap = seed(dir, [rec({ sessionId: 'a', cwd: '/Users/me/projects/alpha', ts: T0 - 65 * 1000 })]);
+  // 这条断言逐字比对 tty，所以显式给定（不走 ttyFor 的按会话派发）
+  const snap = seed(dir, [rec({ sessionId: 'a', cwd: '/Users/me/projects/alpha', tty: '/dev/ttys001', ts: T0 - 65 * 1000 })]);
   const row = run(snap).rows[0];
   for (const key of ['agent', 'form', 'project', 'state', 'subline', 'timeText', 'sessionId']) {
     assert.ok(key in row, `缺字段 ${key}`);
@@ -819,4 +834,88 @@ test('dismissedAt 只影响被点的那条，不波及其它会话', () => {
   const rows = agg.aggregate(sf.readSnapshots(dir),
     { now: T0, isPidAlive: () => true, t, dismissedAt: { a: T0 } }).rows;
   assert.deepStrictEqual(rows.map((r) => r.sessionId), ['b']);
+});
+
+// ---- 10. 同一终端窗口只留当前那条（2026-09-12 用户实测：一个窗口同时出现运行中/空闲/已完成）----
+//
+// 实录形态（~/.local/state 真实数据）：ttys000 上先后跑过两个会话——
+//   1312c200 pid=73697 ended（进程已退出）、775477c6 pid=24784 waiting（现役），
+// 两条同时挂在面板上。点旧的那条会跳到同一个终端窗口，而那里现在跑的是新会话——
+// 按「点得进去才显示」的原则，旧的那条不该在。
+//
+// 判据只对**终端窗口绑定的行**（tty 非空）生效：tty 为 null 的 App 任务不属于任何窗口，
+// 各自独立（Codex App 可以同时有多条任务，不能互相顶掉）。
+
+test('同一 tty：现役会话在时，同窗口的已结束会话不再显示', () => {
+  const dir = tmp();
+  const snap = seed(dir, [
+    // 同一个终端窗口先后跑的三个会话（实录 ttys018/ttys002 都是这个形态）
+    { agent: 'claude-code', sessionId: 'old-done', cwd: '/w/a', tty: '/dev/ttys002', pid: 111,
+      state: 'done', lastEvent: 'Stop', ts: T0 - 3 * MIN },
+    { agent: 'claude-code', sessionId: 'old-ended', cwd: '/w/b', tty: '/dev/ttys002', pid: 111,
+      state: 'ended', lastEvent: 'SessionEnd', ts: T0 - 2 * MIN },
+    { agent: 'claude-code', sessionId: 'live', cwd: '/w/c', tty: '/dev/ttys002', pid: 222,
+      state: 'running', lastEvent: 'PreToolUse', ts: T0 - 10 * 1000 },
+  ]);
+  const rows = agg.aggregate(snap, { now: T0, isPidAlive: () => true, t }).rows;
+  assert.deepStrictEqual(rows.map((r) => r.sessionId), ['live'],
+    '同一个窗口只该显示它当前那条会话');
+  // 汇总也要跟着走：被顶掉的 done 不许继续计进「刚办完」（徽标/胶囊/宠物提醒同源）
+  const sum = agg.aggregate(snap, { now: T0, isPidAlive: () => true, t }).summary;
+  assert.strictEqual(sum.done, 0, '被顶掉的已完成不该再计进汇总');
+  assert.strictEqual(sum.total, 1);
+});
+
+test('同一 tty 全都结束了：只留最新那条（不是三条已完成堆在一起）', () => {
+  const dir = tmp();
+  const snap = seed(dir, [
+    { agent: 'claude-code', sessionId: 'a', cwd: '/w/a', tty: '/dev/ttys003', pid: 11,
+      state: 'done', lastEvent: 'Stop', ts: T0 - 4 * MIN },
+    { agent: 'claude-code', sessionId: 'b', cwd: '/w/b', tty: '/dev/ttys003', pid: 12,
+      state: 'done', lastEvent: 'Stop', ts: T0 - 1 * MIN },
+  ]);
+  const rows = agg.aggregate(snap, { now: T0, isPidAlive: () => true, t }).rows;
+  assert.deepStrictEqual(rows.map((r) => r.sessionId), ['b'], '同窗口保留最近那条');
+});
+
+test('不同 tty 互不影响（两个终端窗口各自的会话都要在）', () => {
+  const dir = tmp();
+  const snap = seed(dir, [
+    { agent: 'claude-code', sessionId: 'w1', cwd: '/w/1', tty: '/dev/ttys001', pid: 1,
+      state: 'running', lastEvent: 'PreToolUse', ts: T0 - 5000 },
+    { agent: 'claude-code', sessionId: 'w2', cwd: '/w/2', tty: '/dev/ttys002', pid: 2,
+      state: 'done', lastEvent: 'Stop', ts: T0 - 5000 },
+  ]);
+  const rows = agg.aggregate(snap, { now: T0, isPidAlive: () => true, t }).rows;
+  assert.deepStrictEqual(rows.map((r) => r.sessionId).sort(), ['w1', 'w2']);
+});
+
+test('tty 为 null 的 App 任务各自独立，绝不互相顶掉', () => {
+  const dir = tmp();
+  const snap = seed(dir, [
+    { agent: 'codex', sessionId: 'app1', cwd: '', project: 'Codex App', tty: null, pid: null,
+      form: 'app', source: 'ipc', threadId: '01a08a1d-4f63-7e30-af03-48ae77b414b5',
+      state: 'done', lastEvent: 'ipc:turn-unread', ts: T0 - 2 * MIN },
+    { agent: 'codex', sessionId: 'app2', cwd: '', project: 'Codex App', tty: null, pid: null,
+      form: 'app', source: 'ipc', threadId: '01a090b0-117a-77b1-9e02-2ccfef2171c2',
+      state: 'running', lastEvent: 'ipc:activity', ts: T0 - 5000 },
+    { agent: 'claude-code', sessionId: 'ccapp', cwd: '/w/x', tty: null, pid: 999,
+      state: 'done', lastEvent: 'Stop', ts: T0 - 1 * MIN },
+  ]);
+  const rows = agg.aggregate(snap, { now: T0, isPidAlive: () => true, t }).rows;
+  assert.deepStrictEqual(rows.map((r) => r.sessionId).sort(), ['app1', 'app2', 'ccapp'],
+    '无 tty 的行不属于任何终端窗口，不适用同窗顶替');
+});
+
+test('同一 tty 上两条都还活着（分屏/异常残留）：都保留，不擅自顶掉现役会话', () => {
+  const dir = tmp();
+  const snap = seed(dir, [
+    { agent: 'claude-code', sessionId: 'r1', cwd: '/w/1', tty: '/dev/ttys004', pid: 1,
+      state: 'running', lastEvent: 'PreToolUse', ts: T0 - 30 * 1000 },
+    { agent: 'claude-code', sessionId: 'r2', cwd: '/w/2', tty: '/dev/ttys004', pid: 2,
+      state: 'waiting', lastEvent: 'Notification', ts: T0 - 5 * 1000 },
+  ]);
+  const rows = agg.aggregate(snap, { now: T0, isPidAlive: () => true, t }).rows;
+  assert.deepStrictEqual(rows.map((r) => r.sessionId).sort(), ['r1', 'r2'],
+    '现役会话一律保留——顶掉一个正在等你批准的会话是丢信息');
 });

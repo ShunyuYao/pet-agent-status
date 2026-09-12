@@ -92,3 +92,32 @@ ps 读不出来、链上找不到自己、npm 安装形态（comm 是 `node` 匹
   隔离状态目录）：跑完整轮、退出码 0，状态目录 **[]** —— 一条都没落。
 - 同一个 hook 喂顶层进程表：照常落盘 `state=running`、带 title 与 since。
 - 本会话（真交互式）自己的行全程健在。
+
+## 8. 同窗三态并存的实录（2026-09-12，同一根因的另一半）
+
+用户报「一个窗口同时出现运行中/空闲/已完成」。把真实状态目录按 tty 分组后一眼看清：
+
+```
+=== tty /dev/ttys018 共 6 条会话（pid 全是 99593，即那个窗口里的父会话）
+    16:08 ended  1f20a60f pet-as-empty-live2
+    16:08 ended  035ee38b pet-as-empty-live2  "只回复 ok"
+    00:46 ended  253acfb0 wd                  "只回复 ok"
+    00:49 ended  da5d2e4f wd                  "只回复 ok"
+    00:53 ended  96aca591 pet-as-nest-wd      "运行 echo hello 然后回复 done"
+    00:58 running 803bf299 桌宠测试版            ← 真正的交互式会话
+=== tty /dev/ttys000 共 2 条（pid 不同：73697 已退出 / 24784 现役）
+    12:28 ended   1312c200 shunyu_wiki
+    13:59 waiting 775477c6 server-management
+```
+
+两种来源：① 前五条是**嵌套 `claude -p`**（§2 那类，已在 hook 侧拦掉）；
+② ttys000 那对是**同一个窗口先后跑的两个会话**——旧的退出了、新的接着开，旧行在
+done/idle 窗口里继续挂着。第二类 hook 拦不掉（它们都是正经的顶层会话），
+故在 `aggregate` 侧按 tty 顶替（PROTOCOL.md「同一终端窗口只显示当前那条会话」）。
+
+真实数据回放（修复前 vs 修复后，同一份状态目录、同一时刻）：
+
+```
+修复前：5 行  running(ttys018) + done(ttys017) + idle×3(ttys018)
+修复后：2 行  running(ttys018) + done(ttys017)
+```
