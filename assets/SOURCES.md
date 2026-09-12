@@ -34,5 +34,10 @@
 
 ## 尺寸
 
-统一 **78px** = 会话行徽标 26pt @3x（底栏是 21pt，@3x 只需 63px，取大的一张两处共用）。
-分辨率下限由 `tests/panel-dom-test.js` 读 PNG IHDR 守住。
+源文件保持 **78px**，与本次在线设计使用的原始 App 素材一致。行徽标裁切框28pt，图片叶节点35pt；底栏裁切框32pt，图片叶节点40pt。两处均依 Figma 显示125%、偏移-12.5%，仅改变显示裁切，不擦除底板、不重新加工源像素。原先「26pt @3x / 底栏21pt」是旧稿尺寸，不能继续作为布局依据。
+
+`tests/panel-dom-test.js` 守住原始分辨率和素材一致性；`test:figma-layout` 在真实宿主检查裁切框、图片位置、解码结果，并保存背景截图供视觉复核。
+
+## Inter 字体
+
+`inter-latin.woff2`：复用本机项目 `claude_code_source/cc-haha/desktop/public/fonts/inter-latin.woff2` 的原始字节。已读取字体 name/fvar 表确认 family=Inter、版本4.001（git-66647c0bb）、weight=100–900，版权属于 Inter Project Authors。项目上游为 https://github.com/rsms/inter；完整 SIL OFL 1.1 随 `Inter-OFL.txt` 分发。字体与图标同样内联到 panel，运行时无远程请求。

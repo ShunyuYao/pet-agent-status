@@ -11,8 +11,7 @@
    跳转时 spawn `osascript`）；③ panel 内纯 HTML/JS（消费 `window.pet`，无框架、无 CDN、
    无远程资源）。**禁止**：要求宿主改代码才能跑、动态拼接 require、eval/new Function、
    自更新逻辑、采集会话正文。
-2. **设计红线**：panel 视觉与交互以 `DESIGN.md` 为准（颜色 token、尺寸、排序规则、徽标两层
-   区分、空态、文案），不得自行发明样式。对照图在 `docs/design/*.png`。
+2. **设计红线**：最新在线 Figma 是视觉权威；`DESIGN.md`、`docs/design/*.png` 和测试都是缓存。实现前读取当前节点；若缓存落后，先更新规格和断言再改实现。不得为了让旧测试通过而保留旧尺寸。
 
    **画过设计稿的功能，实现必须逐项对照设计稿，不许只对照文字规格**（2026-09-12 教训）：
    底栏 App 启动器在 Figma 里画的是**三个真实彩色 App 图标**（从本机 .app 抽出的
@@ -46,6 +45,7 @@
 - 改过的每个 `.js/.mjs` 文件 `node --check` 通过。
 - `for t in tests/*-test.js; do node "$t"; done` 全绿（tests 全部离线：不联网、不起 Electron、
   不读写真实 `~/.claude` 与 `~/.codex`——一律用临时目录夹具 + 环境变量覆盖路径）。
+- 每条新测试必须有命名 npm 入口，并纳入离线或相关领域门禁；UI 改动运行 `npm run test:ui`（离线 + 隐藏宿主 UI E2E）。
 - panel 的 DOM 断言用仓内已装的 `jsdom`（`require('jsdom')`）。
 - 测试里派发的输入必须是「用户/系统真实动作」的等价物：hook 脚本用真实事件 JSON 喂 stdin，
   不许直调内部函数自证；断言用户可观测结果（文件内容/DOM/生成的 osascript 文本），

@@ -5,5 +5,36 @@
   "devDependencies": {
     "jsdom": "^25.0.0"
   },
-  "version": "0.12.0"
+  "version": "0.12.0",
+  "scripts": {
+    "test:aggregate": "node tests/aggregate-test.js",
+    "test:app-launcher": "node tests/app-launcher-test.js",
+    "test:badge": "node tests/badge-test.js",
+    "test:claude-desktop-sessions": "node tests/claude-desktop-sessions-test.js",
+    "test:claude-hook": "node tests/claude-hook-test.js",
+    "test:claude-installer": "node tests/claude-installer-test.js",
+    "test:codex-app-ingest": "node tests/codex-app-ingest-test.js",
+    "test:codex-hook": "node tests/codex-hook-test.js",
+    "test:codex-ipc": "node tests/codex-ipc-test.js",
+    "test:codex-rollout-activity": "node tests/codex-rollout-activity-test.js",
+    "test:codex-thread-titles": "node tests/codex-thread-titles-test.js",
+    "test:nested-session": "node tests/nested-session-test.js",
+    "test:node-bin": "node tests/node-bin-test.js",
+    "test:panel-dom": "node tests/panel-dom-test.js",
+    "test:state-files": "node tests/state-files-test.js",
+    "test:terminal-jump": "node tests/terminal-jump-test.js",
+    "test:terminal-titles": "node tests/terminal-titles-test.js",
+    "test:tool-lifecycle": "node tests/tool-lifecycle-test.js",
+    "test:workbuddy-source": "node tests/workbuddy-source-test.js",
+    "test:offline": "npm run test:aggregate && npm run test:app-launcher && npm run test:badge && npm run test:claude-desktop-sessions && npm run test:claude-hook && npm run test:claude-installer && npm run test:codex-app-ingest && npm run test:codex-hook && npm run test:codex-ipc && npm run test:codex-rollout-activity && npm run test:codex-thread-titles && npm run test:nested-session && npm run test:node-bin && npm run test:panel-dom && npm run test:state-files && npm run test:terminal-jump && npm run test:terminal-titles && npm run test:tool-lifecycle && npm run test:workbuddy-source",
+    "test:dismiss": "node tests/e2e/dismiss-e2e.js",
+    "test:figma-layout": "node tests/e2e/figma-layout-e2e.js",
+    "test:panel-scroll": "node tests/e2e/panel-scroll-e2e.js",
+    "test:ui-parity": "node tests/e2e/ui-parity-e2e.js",
+    "test:waiting-accuracy": "node tests/e2e/waiting-accuracy-e2e.js",
+    "test:ui-e2e": "npm run test:figma-layout && npm run test:ui-parity && npm run test:app-launcher-e2e && npm run test:dismiss && npm run test:waiting-accuracy && npm run test:panel-scroll",
+    "test:app-launcher-e2e": "node tests/e2e/app-launcher-e2e.js",
+    "test:ui": "npm run test:offline && npm run test:ui-e2e",
+    "test": "npm run test:offline"
+  }
 }

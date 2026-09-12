@@ -1,0 +1,10 @@
+{
+  "fonts": [
+    {
+      "familyName": "Inter",
+      "postScriptName": "Inter-Regular",
+      "isCustomFont": true,
+      "glyphCount": 5
+    }
+  ]
+}

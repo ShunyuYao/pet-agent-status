@@ -192,16 +192,15 @@ test('DESIGN.md token 色值逐个出现在 panel.html', () => {
     'rgba(255,255,255,.06)',      // 行底 6%
     'rgba(242,153,74,.13)',       // waiting 行底 橙 13%
     '#D97757',                    // Claude 徽标底
-    '#0D0D0D',                    // Codex 徽标底
-    'rgba(255,255,255,.18)'       // Codex 徽标描边 18%
+    '#3A3F4C'                    // 形态角标内描边
   ];
   for (const token of tokens) {
     assert.ok(html.includes(token), `DESIGN.md token ${token} 未出现在 panel.html`);
   }
-  assert.ok(/border:1\.5px solid/.test(html), 'waiting 行 1.5px 描边缺失');
+  assert.ok(/inset 0 0 0 1px var\(--row-outline\)/.test(html), 'waiting 行 1px 内描边缺失');
 });
 
-test('DESIGN.md 尺寸：徽标 26 圆角 8 / 角标 13 / 项目名 13 / 副行 11 / 状态点 8 / 行圆角 12', () => {
+test('DESIGN.md 尺寸：徽标 28 圆角 8 / 角标 13 / 项目名 12.5 / 副行 10.5 / 状态点 8 / 行圆角 12', () => {
   const css = html.match(/<style>([\s\S]*?)<\/style>/)[1];
   // 选择器要锚在行首，否则 `body{...}` 会先命中 `html,body{height:100%}` 那条
   const ruleOf = (sel) => {
@@ -210,13 +209,13 @@ test('DESIGN.md 尺寸：徽标 26 圆角 8 / 角标 13 / 项目名 13 / 副行 
     return m[1];
   };
   const badge = ruleOf('.badge');
-  assert.ok(/width:26px/.test(badge) && /height:26px/.test(badge), '徽标不是 26×26');
+  assert.ok(/width:28px/.test(badge) && /height:28px/.test(badge), '徽标不是 28×28');
   assert.ok(/border-radius:8px/.test(badge), '徽标圆角不是 8');
   const form = ruleOf('.form-badge');
   assert.ok(/width:13px/.test(form) && /height:13px/.test(form), '形态角标不是 13×13');
-  assert.ok(/font-size:13px/.test(ruleOf('.project')), '项目名字号不是 13');
-  assert.ok(/font-size:11px/.test(ruleOf('.subline')), '副行字号不是 11');
-  assert.ok(/font-size:11px/.test(ruleOf('.time')), '时间字号不是 11');
+  assert.ok(/font-size:12\.5px/.test(ruleOf('.project')), '项目名字号不是 12.5');
+  assert.ok(/font-size:10\.5px/.test(ruleOf('.subline')), '副行字号不是 10.5');
+  assert.ok(/font-size:10\.5px/.test(ruleOf('.time')), '时间字号不是 10.5');
   const dot = ruleOf('.dot');
   assert.ok(/width:8px/.test(dot) && /height:8px/.test(dot), '状态点不是 8px');
   assert.ok(/border-radius:12px/.test(ruleOf('.row')), '会话行圆角不是 12');
@@ -227,7 +226,7 @@ test('DESIGN.md 尺寸：徽标 26 圆角 8 / 角标 13 / 项目名 13 / 副行 
   assert.ok(/font-size:16px/.test(ruleOf('.title')), '面板标题字号不是 16');
   // 底栏 0.11.0 由提示文字改成 App 启动器，度量改钉这三条（设计稿 Figma 第 ⑤ 区 C1）
   const appBtn = ruleOf('.app-btn');
-  assert.ok(/width:34px/.test(appBtn) && /height:34px/.test(appBtn), 'App 图标不是 34×34');
+  assert.ok(/width:40px/.test(appBtn) && /height:40px/.test(appBtn), 'App 按钮不是 40×40');
   assert.ok(/border-radius:9px/.test(appBtn), 'App 图标圆角不是 9');
   const appRow = ruleOf('.applauncher-row');
   assert.ok(/justify-content:center/.test(appRow), 'App 图标必须水平居中');
@@ -289,7 +288,8 @@ test('角标底色/描边对齐设计稿（#2A2E39 底 + #3A3F4C 描边、圆角
   assert.ok(m, '找不到 .form-badge 规则');
   const form = m[1];
   assert.ok(/border-radius:4\.5px/.test(form), '角标圆角应为 4.5');
-  assert.ok(/#3A3F4C|#3a3f4c/.test(form), '角标缺少设计稿的 #3A3F4C 描边');
+  assert.ok(/border:1px solid var\(--form-badge-ring\)/.test(form), '角标必须使用1px内描边');
+  assert.ok(/--form-badge-ring:#3A3F4C/.test(css), '形态描边token必须是设计稿颜色');
   assert.ok(/color:#fff|color:#FFF/.test(form), '角标文字/图形应为白色（旧实现是灰色）');
 });
 
@@ -535,6 +535,7 @@ test('厂牌徽标：Claude 陶土底 SVG / Codex 与 WorkBuddy 用真实彩色 
   const wbImg = badgeOf(WB).querySelector('img');
   assert.ok(wbImg, 'WorkBuddy 徽标必须是 img');
   assert.ok(wbImg.getAttribute('src').startsWith('data:image/png;base64,'), '图必须内联（零远程资源红线）');
+  assert.strictEqual(wbImg.getAttribute('src'), appIconDataUri('app-workbuddy.png'));
   assert.strictEqual(badgeOf(WB).querySelector('svg'), null);
   // 形态角标：CLI（>_）与 App 各归各
   assert.strictEqual(badgeOf('c').querySelector('.form-badge').dataset.form, 'cli');
@@ -551,8 +552,7 @@ test('空态：三要素 + 未接入显蓝色主按钮，Codex 是真次入口�
   assert.strictEqual(p.$('#list').hidden, true);
   assert.strictEqual(p.$('#summary').hidden, true, '零运行中时汇总胶囊应隐藏');
   assert.strictEqual(p.$('#empty-title').textContent, t('empty.title'));
-  assert.strictEqual(p.$('#empty-desc1').textContent, t('empty.desc1'));
-  assert.strictEqual(p.$('#empty-desc2').textContent, t('empty.desc2'));
+  assert.strictEqual(p.$('#empty-desc').textContent, t('empty.description'));
 
   const install = p.$('#install-claude');
   assert.strictEqual(install.hidden, false, '未接入应显示一键接入主按钮');
@@ -1244,7 +1244,14 @@ test('App 启动器图标：panel 内联 data URI 与 assets/app-*.png 逐字节
   }
 });
 
-test('App 图标分辨率足够 Retina（≥78px：行徽标 26pt @3x）', () => {
+// The font bytes must stay in sync with the shipped OFL asset, like the icons above.
+test('Inter 字体内联副本与带许可证的本地素材一致', () => {
+  const font = fs.readFileSync(path.join(ROOT, 'assets/inter-latin.woff2'));
+  assert.ok(html.includes('data:font/woff2;base64,' + font.toString('base64')));
+  assert.ok(fs.readFileSync(path.join(ROOT, 'assets/Inter-OFL.txt'), 'utf8').includes('SIL OPEN FONT LICENSE Version 1.1'));
+});
+
+test('App 图标保留设计源分辨率（≥78px；显示裁切在真实宿主验证）', () => {
   // 2026-09-12 教训：首版做成 42px —— 那是照「底栏 21pt @2x」算的，
   // 但同一张图还要给**行徽标 26pt** 用，@2x 就要 52px、@3x 要 78px，
   // 于是在行徽标上被放大 1.24 倍，肉眼可见发糊。
@@ -1258,6 +1265,6 @@ test('App 图标分辨率足够 Retina（≥78px：行徽标 26pt @3x）', () =>
     const w = buf.readUInt32BE(16);
     const h = buf.readUInt32BE(20);
     assert.ok(w >= MIN && h >= MIN,
-      `${file} 分辨率 ${w}×${h} 不足 ${MIN}px —— 行徽标 26pt @3x 会被放大发糊`);
+      `${file} 分辨率 ${w}×${h} 低于本次设计源 ${MIN}px`);
   }
 });

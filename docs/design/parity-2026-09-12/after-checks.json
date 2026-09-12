@@ -1,0 +1,1202 @@
+[
+  {
+    "label": "panel width",
+    "actual": 320,
+    "expected": 320,
+    "pass": true
+  },
+  {
+    "label": "panel height",
+    "actual": 420,
+    "expected": 420,
+    "pass": true
+  },
+  {
+    "label": "time actually uses bundled Inter",
+    "actual": true,
+    "expected": true,
+    "pass": true
+  },
+  {
+    "label": "first row y",
+    "actual": 45,
+    "expected": 45,
+    "pass": true
+  },
+  {
+    "label": "figma-waiting row x",
+    "actual": 14,
+    "expected": 14,
+    "pass": true
+  },
+  {
+    "label": "figma-waiting row width",
+    "actual": 292,
+    "expected": 292,
+    "pass": true
+  },
+  {
+    "label": "figma-waiting row height",
+    "actual": 49,
+    "expected": 49,
+    "pass": true
+  },
+  {
+    "label": "figma-waiting badge width",
+    "actual": 28,
+    "expected": 28,
+    "pass": true
+  },
+  {
+    "label": "figma-waiting badge height",
+    "actual": 28,
+    "expected": 28,
+    "pass": true
+  },
+  {
+    "label": "figma-waiting badge x within row",
+    "actual": 10,
+    "expected": 10,
+    "pass": true
+  },
+  {
+    "label": "figma-waiting badge y within row",
+    "actual": 10.5,
+    "expected": 10.5,
+    "pass": true
+  },
+  {
+    "label": "figma-waiting form x",
+    "actual": 18,
+    "expected": 18,
+    "pass": true
+  },
+  {
+    "label": "figma-waiting form y",
+    "actual": 18,
+    "expected": 18,
+    "pass": true
+  },
+  {
+    "label": "figma-waiting form width",
+    "actual": 13,
+    "expected": 13,
+    "pass": true
+  },
+  {
+    "label": "figma-waiting form height",
+    "actual": 13,
+    "expected": 13,
+    "pass": true
+  },
+  {
+    "label": "figma-waiting form stroke",
+    "actual": "1px",
+    "expected": "1px",
+    "pass": true
+  },
+  {
+    "label": "figma-waiting form stroke color",
+    "actual": "rgb(58, 63, 76)",
+    "expected": "rgb(58, 63, 76)",
+    "pass": true
+  },
+  {
+    "label": "figma-waiting logo width",
+    "actual": 20,
+    "expected": 20,
+    "pass": true
+  },
+  {
+    "label": "figma-waiting logo inset",
+    "actual": 4,
+    "expected": 4,
+    "pass": true
+  },
+  {
+    "label": "figma-waiting title x",
+    "actual": 46,
+    "expected": 46,
+    "pass": true
+  },
+  {
+    "label": "figma-waiting title y",
+    "actual": 9,
+    "expected": 9,
+    "pass": true
+  },
+  {
+    "label": "figma-waiting subtitle y",
+    "actual": 27,
+    "expected": 27,
+    "pass": true
+  },
+  {
+    "label": "figma-waiting title font",
+    "actual": "12.5px",
+    "expected": "12.5px",
+    "pass": true
+  },
+  {
+    "label": "figma-waiting subtitle font",
+    "actual": "10.5px",
+    "expected": "10.5px",
+    "pass": true
+  },
+  {
+    "label": "figma-waiting status dot x",
+    "actual": 236,
+    "expected": 236,
+    "pass": true
+  },
+  {
+    "label": "figma-waiting status dot y",
+    "actual": 20.5,
+    "expected": 20.5,
+    "pass": true
+  },
+  {
+    "label": "figma-running row x",
+    "actual": 14,
+    "expected": 14,
+    "pass": true
+  },
+  {
+    "label": "figma-running row width",
+    "actual": 292,
+    "expected": 292,
+    "pass": true
+  },
+  {
+    "label": "figma-running row height",
+    "actual": 49,
+    "expected": 49,
+    "pass": true
+  },
+  {
+    "label": "figma-running row gap",
+    "actual": 8,
+    "expected": 8,
+    "pass": true
+  },
+  {
+    "label": "figma-running badge width",
+    "actual": 28,
+    "expected": 28,
+    "pass": true
+  },
+  {
+    "label": "figma-running badge height",
+    "actual": 28,
+    "expected": 28,
+    "pass": true
+  },
+  {
+    "label": "figma-running badge x within row",
+    "actual": 10,
+    "expected": 10,
+    "pass": true
+  },
+  {
+    "label": "figma-running badge y within row",
+    "actual": 10.5,
+    "expected": 10.5,
+    "pass": true
+  },
+  {
+    "label": "figma-running form x",
+    "actual": 18,
+    "expected": 18,
+    "pass": true
+  },
+  {
+    "label": "figma-running form y",
+    "actual": 18,
+    "expected": 18,
+    "pass": true
+  },
+  {
+    "label": "figma-running form width",
+    "actual": 13,
+    "expected": 13,
+    "pass": true
+  },
+  {
+    "label": "figma-running form height",
+    "actual": 13,
+    "expected": 13,
+    "pass": true
+  },
+  {
+    "label": "figma-running form stroke",
+    "actual": "1px",
+    "expected": "1px",
+    "pass": true
+  },
+  {
+    "label": "figma-running form stroke color",
+    "actual": "rgb(58, 63, 76)",
+    "expected": "rgb(58, 63, 76)",
+    "pass": true
+  },
+  {
+    "label": "figma-running logo width",
+    "actual": 20,
+    "expected": 20,
+    "pass": true
+  },
+  {
+    "label": "figma-running logo inset",
+    "actual": 4,
+    "expected": 4,
+    "pass": true
+  },
+  {
+    "label": "figma-running title x",
+    "actual": 46,
+    "expected": 46,
+    "pass": true
+  },
+  {
+    "label": "figma-running title y",
+    "actual": 9,
+    "expected": 9,
+    "pass": true
+  },
+  {
+    "label": "figma-running subtitle y",
+    "actual": 27,
+    "expected": 27,
+    "pass": true
+  },
+  {
+    "label": "figma-running title font",
+    "actual": "12.5px",
+    "expected": "12.5px",
+    "pass": true
+  },
+  {
+    "label": "figma-running subtitle font",
+    "actual": "10.5px",
+    "expected": "10.5px",
+    "pass": true
+  },
+  {
+    "label": "figma-running status dot x",
+    "actual": 236,
+    "expected": 236,
+    "pass": true
+  },
+  {
+    "label": "figma-running status dot y",
+    "actual": 20.5,
+    "expected": 20.5,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 row x",
+    "actual": 14,
+    "expected": 14,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 row width",
+    "actual": 292,
+    "expected": 292,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 row height",
+    "actual": 49,
+    "expected": 49,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 row gap",
+    "actual": 8,
+    "expected": 8,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 badge width",
+    "actual": 28,
+    "expected": 28,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 badge height",
+    "actual": 28,
+    "expected": 28,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 badge x within row",
+    "actual": 10,
+    "expected": 10,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 badge y within row",
+    "actual": 10.5,
+    "expected": 10.5,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 form x",
+    "actual": 18,
+    "expected": 18,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 form y",
+    "actual": 18,
+    "expected": 18,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 form width",
+    "actual": 13,
+    "expected": 13,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 form height",
+    "actual": 13,
+    "expected": 13,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 form stroke",
+    "actual": "1px",
+    "expected": "1px",
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 form stroke color",
+    "actual": "rgb(58, 63, 76)",
+    "expected": "rgb(58, 63, 76)",
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 image crop width",
+    "actual": 28,
+    "expected": 28,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 cropped image leaf",
+    "actual": 35,
+    "expected": 35,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 image crop offset",
+    "actual": -3.5,
+    "expected": -3.5,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 window glyph width",
+    "actual": 6.3984375,
+    "expected": 6.4,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 window glyph height",
+    "actual": 5,
+    "expected": 5,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 window title bar",
+    "actual": 1.09375,
+    "expected": 1.1,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 title x",
+    "actual": 46,
+    "expected": 46,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 title y",
+    "actual": 9,
+    "expected": 9,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 subtitle y",
+    "actual": 27,
+    "expected": 27,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 title font",
+    "actual": "12.5px",
+    "expected": "12.5px",
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 subtitle font",
+    "actual": "10.5px",
+    "expected": "10.5px",
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 status dot x",
+    "actual": 236,
+    "expected": 236,
+    "pass": true
+  },
+  {
+    "label": "11111111-1111-4111-8111-111111111111 status dot y",
+    "actual": 20.5,
+    "expected": 20.5,
+    "pass": true
+  },
+  {
+    "label": "figma-done row x",
+    "actual": 14,
+    "expected": 14,
+    "pass": true
+  },
+  {
+    "label": "figma-done row width",
+    "actual": 292,
+    "expected": 292,
+    "pass": true
+  },
+  {
+    "label": "figma-done row height",
+    "actual": 49,
+    "expected": 49,
+    "pass": true
+  },
+  {
+    "label": "figma-done row gap",
+    "actual": 8,
+    "expected": 8,
+    "pass": true
+  },
+  {
+    "label": "figma-done badge width",
+    "actual": 28,
+    "expected": 28,
+    "pass": true
+  },
+  {
+    "label": "figma-done badge height",
+    "actual": 28,
+    "expected": 28,
+    "pass": true
+  },
+  {
+    "label": "figma-done badge x within row",
+    "actual": 10,
+    "expected": 10,
+    "pass": true
+  },
+  {
+    "label": "figma-done badge y within row",
+    "actual": 10.5,
+    "expected": 10.5,
+    "pass": true
+  },
+  {
+    "label": "figma-done form x",
+    "actual": 18,
+    "expected": 18,
+    "pass": true
+  },
+  {
+    "label": "figma-done form y",
+    "actual": 18,
+    "expected": 18,
+    "pass": true
+  },
+  {
+    "label": "figma-done form width",
+    "actual": 13,
+    "expected": 13,
+    "pass": true
+  },
+  {
+    "label": "figma-done form height",
+    "actual": 13,
+    "expected": 13,
+    "pass": true
+  },
+  {
+    "label": "figma-done form stroke",
+    "actual": "1px",
+    "expected": "1px",
+    "pass": true
+  },
+  {
+    "label": "figma-done form stroke color",
+    "actual": "rgb(58, 63, 76)",
+    "expected": "rgb(58, 63, 76)",
+    "pass": true
+  },
+  {
+    "label": "figma-done image crop width",
+    "actual": 28,
+    "expected": 28,
+    "pass": true
+  },
+  {
+    "label": "figma-done cropped image leaf",
+    "actual": 35,
+    "expected": 35,
+    "pass": true
+  },
+  {
+    "label": "figma-done image crop offset",
+    "actual": -3.5,
+    "expected": -3.5,
+    "pass": true
+  },
+  {
+    "label": "figma-done title x",
+    "actual": 46,
+    "expected": 46,
+    "pass": true
+  },
+  {
+    "label": "figma-done title y",
+    "actual": 9,
+    "expected": 9,
+    "pass": true
+  },
+  {
+    "label": "figma-done subtitle y",
+    "actual": 27,
+    "expected": 27,
+    "pass": true
+  },
+  {
+    "label": "figma-done title font",
+    "actual": "12.5px",
+    "expected": "12.5px",
+    "pass": true
+  },
+  {
+    "label": "figma-done subtitle font",
+    "actual": "10.5px",
+    "expected": "10.5px",
+    "pass": true
+  },
+  {
+    "label": "figma-done status dot x",
+    "actual": 236,
+    "expected": 236,
+    "pass": true
+  },
+  {
+    "label": "figma-done status dot y",
+    "actual": 20.5,
+    "expected": 20.5,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 row x",
+    "actual": 14,
+    "expected": 14,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 row width",
+    "actual": 292,
+    "expected": 292,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 row height",
+    "actual": 49,
+    "expected": 49,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 row gap",
+    "actual": 8,
+    "expected": 8,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 badge width",
+    "actual": 28,
+    "expected": 28,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 badge height",
+    "actual": 28,
+    "expected": 28,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 badge x within row",
+    "actual": 10,
+    "expected": 10,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 badge y within row",
+    "actual": 10.5,
+    "expected": 10.5,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 form x",
+    "actual": 18,
+    "expected": 18,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 form y",
+    "actual": 18,
+    "expected": 18,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 form width",
+    "actual": 13,
+    "expected": 13,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 form height",
+    "actual": 13,
+    "expected": 13,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 form stroke",
+    "actual": "1px",
+    "expected": "1px",
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 form stroke color",
+    "actual": "rgb(58, 63, 76)",
+    "expected": "rgb(58, 63, 76)",
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 image crop width",
+    "actual": 28,
+    "expected": 28,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 cropped image leaf",
+    "actual": 35,
+    "expected": 35,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 image crop offset",
+    "actual": -3.5,
+    "expected": -3.5,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 window glyph width",
+    "actual": 6.3984375,
+    "expected": 6.4,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 window glyph height",
+    "actual": 5,
+    "expected": 5,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 window title bar",
+    "actual": 1.09375,
+    "expected": 1.1,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 title x",
+    "actual": 46,
+    "expected": 46,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 title y",
+    "actual": 9,
+    "expected": 9,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 subtitle y",
+    "actual": 27,
+    "expected": 27,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 title font",
+    "actual": "12.5px",
+    "expected": "12.5px",
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 subtitle font",
+    "actual": "10.5px",
+    "expected": "10.5px",
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 status dot x",
+    "actual": 236,
+    "expected": 236,
+    "pass": true
+  },
+  {
+    "label": "22222222-2222-4222-8222-222222222222 status dot y",
+    "actual": 20.5,
+    "expected": 20.5,
+    "pass": true
+  },
+  {
+    "label": "footer divider y",
+    "actual": 358,
+    "expected": 358,
+    "pass": true
+  },
+  {
+    "label": "launcher y",
+    "actual": 366,
+    "expected": 366,
+    "pass": true
+  },
+  {
+    "label": "launcher height",
+    "actual": 40,
+    "expected": 40,
+    "pass": true
+  },
+  {
+    "label": "launcher order",
+    "actual": "claude,codex,workbuddy",
+    "expected": "claude,codex,workbuddy",
+    "pass": true
+  },
+  {
+    "label": "launcher claude button width",
+    "actual": 40,
+    "expected": 40,
+    "pass": true
+  },
+  {
+    "label": "launcher claude button height",
+    "actual": 40,
+    "expected": 40,
+    "pass": true
+  },
+  {
+    "label": "launcher claude x",
+    "actual": 86,
+    "expected": 86,
+    "pass": true
+  },
+  {
+    "label": "launcher claude button y",
+    "actual": 366,
+    "expected": 366,
+    "pass": true
+  },
+  {
+    "label": "launcher claude clip width",
+    "actual": 32,
+    "expected": 32,
+    "pass": true
+  },
+  {
+    "label": "launcher claude clip height",
+    "actual": 32,
+    "expected": 32,
+    "pass": true
+  },
+  {
+    "label": "launcher claude clip inset",
+    "actual": 4,
+    "expected": 4,
+    "pass": true
+  },
+  {
+    "label": "launcher claude clip y",
+    "actual": 370,
+    "expected": 370,
+    "pass": true
+  },
+  {
+    "label": "launcher claude image leaf width",
+    "actual": 40,
+    "expected": 40,
+    "pass": true
+  },
+  {
+    "label": "launcher claude crop offset",
+    "actual": -4,
+    "expected": -4,
+    "pass": true
+  },
+  {
+    "label": "launcher claude no resting gray plate",
+    "actual": "rgba(0, 0, 0, 0)",
+    "expected": "rgba(0, 0, 0, 0)",
+    "pass": true
+  },
+  {
+    "label": "launcher claude decoded",
+    "actual": true,
+    "expected": true,
+    "pass": true
+  },
+  {
+    "label": "launcher claude exact packaged asset",
+    "actual": "51ff7b0af93ef85ea3b162df5ddb0804872298c430d0dd587398456b5d41af2b",
+    "expected": "51ff7b0af93ef85ea3b162df5ddb0804872298c430d0dd587398456b5d41af2b",
+    "pass": true
+  },
+  {
+    "label": "launcher claude dot x",
+    "actual": 32,
+    "expected": 32,
+    "pass": true
+  },
+  {
+    "label": "launcher claude dot y",
+    "actual": 0,
+    "expected": 0,
+    "pass": true
+  },
+  {
+    "label": "launcher claude dot size",
+    "actual": 8,
+    "expected": 8,
+    "pass": true
+  },
+  {
+    "label": "launcher codex button width",
+    "actual": 40,
+    "expected": 40,
+    "pass": true
+  },
+  {
+    "label": "launcher codex button height",
+    "actual": 40,
+    "expected": 40,
+    "pass": true
+  },
+  {
+    "label": "launcher codex x",
+    "actual": 140,
+    "expected": 140,
+    "pass": true
+  },
+  {
+    "label": "launcher codex button y",
+    "actual": 366,
+    "expected": 366,
+    "pass": true
+  },
+  {
+    "label": "launcher codex clip width",
+    "actual": 32,
+    "expected": 32,
+    "pass": true
+  },
+  {
+    "label": "launcher codex clip height",
+    "actual": 32,
+    "expected": 32,
+    "pass": true
+  },
+  {
+    "label": "launcher codex clip inset",
+    "actual": 4,
+    "expected": 4,
+    "pass": true
+  },
+  {
+    "label": "launcher codex clip y",
+    "actual": 370,
+    "expected": 370,
+    "pass": true
+  },
+  {
+    "label": "launcher codex image leaf width",
+    "actual": 40,
+    "expected": 40,
+    "pass": true
+  },
+  {
+    "label": "launcher codex crop offset",
+    "actual": -4,
+    "expected": -4,
+    "pass": true
+  },
+  {
+    "label": "launcher codex no resting gray plate",
+    "actual": "rgba(0, 0, 0, 0)",
+    "expected": "rgba(0, 0, 0, 0)",
+    "pass": true
+  },
+  {
+    "label": "launcher codex decoded",
+    "actual": true,
+    "expected": true,
+    "pass": true
+  },
+  {
+    "label": "launcher codex exact packaged asset",
+    "actual": "31e5e65aa6aa594e47ada2886ebfd028b2476473e08fb7409f20a30c75c9b0e8",
+    "expected": "31e5e65aa6aa594e47ada2886ebfd028b2476473e08fb7409f20a30c75c9b0e8",
+    "pass": true
+  },
+  {
+    "label": "launcher workbuddy button width",
+    "actual": 40,
+    "expected": 40,
+    "pass": true
+  },
+  {
+    "label": "launcher workbuddy button height",
+    "actual": 40,
+    "expected": 40,
+    "pass": true
+  },
+  {
+    "label": "launcher workbuddy x",
+    "actual": 194,
+    "expected": 194,
+    "pass": true
+  },
+  {
+    "label": "launcher workbuddy button y",
+    "actual": 366,
+    "expected": 366,
+    "pass": true
+  },
+  {
+    "label": "launcher workbuddy clip width",
+    "actual": 32,
+    "expected": 32,
+    "pass": true
+  },
+  {
+    "label": "launcher workbuddy clip height",
+    "actual": 32,
+    "expected": 32,
+    "pass": true
+  },
+  {
+    "label": "launcher workbuddy clip inset",
+    "actual": 4,
+    "expected": 4,
+    "pass": true
+  },
+  {
+    "label": "launcher workbuddy clip y",
+    "actual": 370,
+    "expected": 370,
+    "pass": true
+  },
+  {
+    "label": "launcher workbuddy image leaf width",
+    "actual": 40,
+    "expected": 40,
+    "pass": true
+  },
+  {
+    "label": "launcher workbuddy crop offset",
+    "actual": -4,
+    "expected": -4,
+    "pass": true
+  },
+  {
+    "label": "launcher workbuddy no resting gray plate",
+    "actual": "rgba(0, 0, 0, 0)",
+    "expected": "rgba(0, 0, 0, 0)",
+    "pass": true
+  },
+  {
+    "label": "launcher workbuddy decoded",
+    "actual": true,
+    "expected": true,
+    "pass": true
+  },
+  {
+    "label": "launcher workbuddy exact packaged asset",
+    "actual": "ad9145e7c65774ac2c9d5d9de5219a287cd08ce89177b9f66380250f6638fa47",
+    "expected": "ad9145e7c65774ac2c9d5d9de5219a287cd08ce89177b9f66380250f6638fa47",
+    "pass": true
+  },
+  {
+    "label": "launcher workbuddy dot x",
+    "actual": 32,
+    "expected": 32,
+    "pass": true
+  },
+  {
+    "label": "launcher workbuddy dot y",
+    "actual": 0,
+    "expected": 0,
+    "pass": true
+  },
+  {
+    "label": "launcher workbuddy dot size",
+    "actual": 8,
+    "expected": 8,
+    "pass": true
+  },
+  {
+    "label": "header hit width",
+    "actual": 22,
+    "expected": 22,
+    "pass": true
+  },
+  {
+    "label": "header icon width",
+    "actual": 13,
+    "expected": 13,
+    "pass": true
+  },
+  {
+    "label": "header hit width",
+    "actual": 22,
+    "expected": 22,
+    "pass": true
+  },
+  {
+    "label": "header icon width",
+    "actual": 13,
+    "expected": 13,
+    "pass": true
+  },
+  {
+    "label": "2 app centered",
+    "actual": 160,
+    "expected": 160,
+    "pass": true
+  },
+  {
+    "label": "1 app centered",
+    "actual": 160,
+    "expected": 160,
+    "pass": true
+  },
+  {
+    "label": "no apps footer hidden",
+    "actual": true,
+    "expected": true,
+    "pass": true
+  },
+  {
+    "label": "empty icon x",
+    "actual": 132,
+    "expected": 132,
+    "pass": true
+  },
+  {
+    "label": "empty icon y",
+    "actual": 96,
+    "expected": 96,
+    "pass": true
+  },
+  {
+    "label": "empty icon radius",
+    "actual": "16px",
+    "expected": "16px",
+    "pass": true
+  },
+  {
+    "label": "empty title y",
+    "actual": 168,
+    "expected": 168,
+    "pass": true
+  },
+  {
+    "label": "empty footer divider y",
+    "actual": 358,
+    "expected": 358,
+    "pass": true
+  },
+  {
+    "label": "empty description y",
+    "actual": 194,
+    "expected": 194,
+    "pass": true
+  },
+  {
+    "label": "empty description width",
+    "actual": 220,
+    "expected": 220,
+    "pass": true
+  },
+  {
+    "label": "empty description two lines",
+    "actual": 28,
+    "expected": 28,
+    "pass": true
+  },
+  {
+    "label": "empty description matches current Figma",
+    "actual": "在终端里启动 Claude Code 或 Codex，这里会实时显示它们的进度",
+    "expected": "在终端里启动 Claude Code 或 Codex，这里会实时显示它们的进度",
+    "pass": true
+  },
+  {
+    "label": "setup writes only fixture config",
+    "actual": true,
+    "expected": true,
+    "pass": true
+  },
+  {
+    "label": "installed state footer remains anchored",
+    "actual": 358,
+    "expected": 358,
+    "pass": true
+  },
+  {
+    "label": "empty icon without footer y",
+    "actual": 120,
+    "expected": 120,
+    "pass": true
+  },
+  {
+    "label": "settings opens",
+    "actual": true,
+    "expected": true,
+    "pass": true
+  },
+  {
+    "label": "fresh instance stays empty",
+    "actual": 0,
+    "expected": 0,
+    "pass": true
+  },
+  {
+    "label": "fresh instance real bridge",
+    "actual": "function",
+    "expected": "function",
+    "pass": true
+  },
+  {
+    "label": "setup survives fresh instance",
+    "actual": true,
+    "expected": true,
+    "pass": true
+  },
+  {
+    "label": "renderer errors",
+    "actual": 0,
+    "expected": 0,
+    "pass": true
+  }
+]

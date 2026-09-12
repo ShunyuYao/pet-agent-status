@@ -1,121 +1,31 @@
 'use strict';
-// 真宿主 E2E：底栏 App 启动器 + 徽标常驻（0.11.0）。
-//
-// 离线 jsdom 证明不了的三环，只有真宿主能验：
-//   ① 宿主真的接受「1 段 muted + 空文本」的徽标（normalizeBadgeSegments 拒 length<1，
-//      空文本是读源码确认合法的——但读源码 ≠ 跑通，这里真发一次看返回值）；
-//   ② panel CSP 下内联 SVG / data URI 图标真的画得出来（img-src 对 file:// 不可靠，
-//      正是当初行徽标改内联的原因，新加的启动器图标要重走一遍这个坑）；
-//   ③ 点击 → pet.events → tool → app-launcher 这条跨进程链真的通。
-//
-// ⚠️ **绝不真的拉起 App**：open 走 tool 侧，E2E 只断言「意图发出去了且 tool 收到」，
-// 不断言桌面上真弹出了 Claude —— 那会骚扰维护者的真实桌面（同 osascript 纪律）。
-//
-// 隔离两要素（AGENTS.md 硬规矩）：PET_USERDATA_DIR 临时目录 + 独立 CDP 端口（9338）。
-// 跑法：node tests/e2e/app-launcher-e2e.js
+// Real hidden Electron + exact production panel/collector/SDK; external sources and
+// OS commands are isolated by hidden-host.js. DOM clicks test panel intent delivery;
+// native mouse passthrough/focus and actual external App activation are excluded.
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
-
-const HOST = '/Users/shunyu/projects/desktop_pet/桌宠测试版';
-const CDP = Number(process.env.E2E_CDP_PORT || 9338);
+const { start } = require('./hidden-host');
 const PLUGIN_DIR = path.join(__dirname, '..', '..');
-
-let passed = 0; let failed = 0;
-function ok(cond, label, detail = '') {
-  if (cond) { passed++; console.log('  ✓', label); }
-  else { failed++; console.log('  ✗', label, detail ? `— ${detail}` : ''); }
+let passed = 0, failed = 0, currentHost;
+function ok(condition, label, detail = '') {
+  if (condition) { passed++; console.log('  ✓', label); }
+  else { failed++; console.log('  ✗', label, detail); }
 }
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function cdpTargets() {
-  try { return await (await fetch(`http://127.0.0.1:${CDP}/json/list`)).json(); }
-  catch (_) { return []; }
-}
-async function findTarget(sub) {
-  return (await cdpTargets()).find((t) => String(t.url).includes(sub)) || null;
-}
-async function evalIn(target, expr) {
-  const ws = new globalThis.WebSocket(target.webSocketDebuggerUrl);
-  await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
-  const out = await new Promise((res, rej) => {
-    const id = Math.floor(Math.random() * 1e6);
-    const timer = setTimeout(() => rej(new Error('CDP eval 超时')), 20000);
-    ws.onmessage = (m) => {
-      const msg = JSON.parse(m.data);
-      if (msg.id !== id) return;
-      clearTimeout(timer);
-      if (msg.result && msg.result.exceptionDetails) {
-        return rej(new Error(JSON.stringify(msg.result.exceptionDetails).slice(0, 300)));
-      }
-      res(msg.result && msg.result.result ? msg.result.result.value : undefined);
-    };
-    ws.send(JSON.stringify({
-      id, method: 'Runtime.evaluate',
-      params: { expression: `(async()=>{${expr}})()`, awaitPromise: true, returnByValue: true }
-    }));
-  });
-  ws.close();
-  return out;
-}
-async function waitFor(fn, label, tries = 120) {
-  for (let i = 0; i < tries; i++) {
-    try { const v = await fn(); if (v) return v; } catch (_) { /* 未就绪 */ }
-    await sleep(500);
-  }
-  throw new Error(`等待超时：${label}`);
-}
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const evalIn = (target, body) => currentHost.evaluate(`(async()=>{ ${body} })()`, target);
+const findTarget = (needle) => currentHost.findTarget(needle);
+const waitFor = (fn, label, tries = 120) => currentHost.waitFor(fn, label, tries * 250);
 
 (async () => {
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'pet-as-e2e-ud-'));
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pet-as-e2e-state-'));
-  let app = null;
+  let host;
   try {
-    const mf = require(path.join(PLUGIN_DIR, 'manifest.json'));
-    const grants = {};
-    grants[mf.id] = { granted: mf.permissions.slice(), version: mf.version, at: Date.now() };
-    fs.writeFileSync(path.join(userData, 'config.json'),
-      JSON.stringify({ plugins: { grants } }, null, 2));
-
-    console.log('起隔离宿主实例（CDP', CDP, ')');
-    app = spawn('npx', ['--no-install', 'electron', '.', `--remote-debugging-port=${CDP}`], {
-      cwd: path.join(HOST, 'demo'),
-      env: Object.assign({}, process.env, {
-        PET_USERDATA_DIR: userData,
-        PET_AGENT_STATUS_DIR: stateDir,
-        PET_E2E_TEST: '1', PET_E2E_BACKGROUND: '1', PET_E2E_HIDDEN: '1'
-      }),
-      detached: true, stdio: ['ignore', 'pipe', 'pipe']
-    });
-    let log = '';
-    app.stdout.on('data', (d) => { log += d; });
-    app.stderr.on('data', (d) => { log += d; });
-
-    await waitFor(async () => (await cdpTargets()).length > 0, 'CDP 就绪');
-    const settings = await waitFor(async () => {
-      const pet = await findTarget('demo/index.html');
-      if (!pet) return null;
-      await evalIn(pet, "window.petAPI.openSettings('plugins'); return 1;");
-      await sleep(1500);
-      return findTarget('settings.html');
-    }, '设置窗打开');
-
-    const inst = await evalIn(settings, `
-      const r = await window.settings.pluginsInstallPath(${JSON.stringify(PLUGIN_DIR)});
-      return JSON.stringify(r);`);
-    ok(/"ok":true/.test(String(inst)), '插件旁加载安装成功', String(inst).slice(0, 120));
-
-    await waitFor(async () => {
-      const list = JSON.parse(await evalIn(settings, 'return JSON.stringify(await window.settings.pluginsList());'));
-      const me = list.find((p) => p.id === 'pet-agent-status');
-      return me && me.status === 'active' ? me : null;
-    }, '插件激活');
-
-    await evalIn(settings, "await window.settings.pluginsTogglePanel('pet-agent-status'); return 1;");
-    const panel = await waitFor(() => findTarget('pet-agent-status/panel/panel.html'), '插件面板打开');
-
-    // ---- 1. 底栏渲染出图标（本机装了 Claude/Codex/WorkBuddy）----
+    host = currentHost = await start();
+    const { settings, panel } = host;
+    const stateDir = host.paths.state;
+    const info = (await host.evaluate('window.settings.pluginsList()', settings)).find((plugin) => plugin.id === 'pet-agent-status');
+    ok(info?.status === 'active', '插件旁加载安装成功且已激活');
+    ok(info.version === require(path.join(PLUGIN_DIR, 'manifest.json')).version, '装上的是当前插件版本');
+    // ---- 1. 底栏渲染出图标（隔离安装目录夹具含 Claude/Codex/WorkBuddy）----
     const apps = await waitFor(async () => {
       const r = await evalIn(panel, `
         const box = document.getElementById('applauncher');
@@ -123,15 +33,15 @@ async function waitFor(fn, label, tries = 120) {
         return JSON.stringify({
           hidden: box ? box.hidden : null,
           ids: btns.map(b => b.dataset.appId),
-          // 图标真的画出来了吗（内联 SVG 或 data URI img），不是空按钮
-          drawn: btns.map(b => !!b.querySelector('svg, img'))
+          // 验证已解码的真实 PNG，不能用 SVG 或空图片冒充
+          drawn: btns.map(b => { const i = b.querySelector('img'); return !!i && i.complete && i.naturalWidth >= 78 && i.src.startsWith('data:image/png;base64,') && !b.querySelector('svg'); })
         });`);
       const v = r ? JSON.parse(String(r)) : null;
       return v && v.ids.length ? v : null;
     }, '底栏出现 App 图标');
-    ok(apps.hidden === false, '底栏可见（本机至少装了一个支持的 App）');
+    ok(apps.hidden === false, '底栏可见（隔离夹具安装了三个支持的 App）');
     ok(apps.ids.length > 0, `渲染出 ${apps.ids.length} 个 App 图标：${apps.ids.join(',')}`);
-    ok(apps.drawn.every(Boolean), '每个按钮里都真的画出了图标（CSP 没拦掉内联 SVG / data URI）',
+    ok(apps.drawn.every(Boolean), '每个按钮里的真实 PNG 都已解码（CSP 未拦截）',
       JSON.stringify(apps.drawn));
 
     // 顺序必须是登记表顺序（不按有无会话动态排）
@@ -163,6 +73,12 @@ async function waitFor(fn, label, tries = 120) {
       return id;`);
     ok(typeof clicked === 'string' && clicked.length > 0,
       `点击 ${clicked} 图标未抛异常（意图已发往 tool）`);
+    const openAction = await waitFor(() => {
+      const records = fs.readFileSync(host.paths.actions, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse);
+      return records.find((record) => record.command === 'open');
+    }, '真实事件桥发出外部打开命令');
+    ok(openAction.args[0] === '-b' && openAction.args[1] === 'com.anthropic.claudefordesktop',
+      'tool 按登记表把 Claude 打开意图送达进程边界（隔离记录，不激活真实 App）', JSON.stringify(openAction));
 
     // ---- 4. 徽标常驻：无会话时仍然存在（本轮改动①）----
     // 状态目录是空的 → summary 全 0 → 旧实现会 clear 掉整个徽标
@@ -194,14 +110,23 @@ async function waitFor(fn, label, tries = 120) {
       ok(badge.text === '', '空徽标不显示任何数字', `text="${badge.text}"`);
     }
 
+    const log = fs.readFileSync(host.paths.log, 'utf8');
     ok(!/TypeError|Uncaught|Unhandled/.test(log), '宿主日志无未处理异常', String(log).slice(-400));
-  } catch (e) {
+
+    ok(host.errors.length === 0, 'renderer 无异常或 console error', JSON.stringify(host.errors));
+    await host.screenshot(path.join(host.paths.artifacts, 'panel.png'));
+    console.log('  证据:', host.paths.artifacts);
+  } catch (error) {
     failed++;
-    console.log('  ✗ E2E 异常:', (e && e.stack) || e);
+    console.log('  ✗ E2E 异常:', error.stack || error);
+    if (host?.panel) {
+      try { await host.screenshot(path.join(host.paths.artifacts, 'failure.png')); }
+      catch (captureError) { console.log('  失败截图不可用:', captureError.message); }
+    }
   } finally {
-    if (app && app.pid) { try { process.kill(-app.pid, 'SIGKILL'); } catch (_) { try { app.kill('SIGKILL'); } catch (_) { /* 已死 */ } } }
-    for (const d of [userData, stateDir]) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (_) { /* 尽力 */ } }
+    if (host) await host.stop();
   }
-  console.log(`\napp-launcher-e2e: ${passed} 通过 / ${failed} 失败`);
-  process.exit(failed ? 1 : 0);
+  console.log(`
+app-launcher-e2e: ${passed} 通过 / ${failed} 失败`);
+  process.exitCode = failed ? 1 : 0;
 })();
