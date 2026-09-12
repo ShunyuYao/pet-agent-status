@@ -1091,3 +1091,21 @@ test('App 启动器图标：panel 内联 data URI 与 assets/app-*.png 逐字节
       `panel 内联的 ${appId} 图标与 assets/${file} 不一致（改了图要同步内联副本）`);
   }
 });
+
+test('App 图标分辨率足够 Retina（≥78px：行徽标 26pt @3x）', () => {
+  // 2026-09-12 教训：首版做成 42px —— 那是照「底栏 21pt @2x」算的，
+  // 但同一张图还要给**行徽标 26pt** 用，@2x 就要 52px、@3x 要 78px，
+  // 于是在行徽标上被放大 1.24 倍，肉眼可见发糊。
+  // Codex 更惨：42px 那张还裁掉了 28% 白边，有效分辨率只剩约 30px。
+  // 逐字节守卫（内联副本 vs assets/）对「两边一样糊」恒真，测不出这个问题，故单列一条。
+  const MIN = 78;
+  for (const file of ['app-claude.png', 'app-codex.png', 'app-workbuddy.png']) {
+    const buf = fs.readFileSync(path.join(ROOT, 'assets', file));
+    // PNG IHDR：宽高是第 16–23 字节的两个大端 uint32
+    assert.strictEqual(buf.slice(1, 4).toString('ascii'), 'PNG', `${file} 不是 PNG`);
+    const w = buf.readUInt32BE(16);
+    const h = buf.readUInt32BE(20);
+    assert.ok(w >= MIN && h >= MIN,
+      `${file} 分辨率 ${w}×${h} 不足 ${MIN}px —— 行徽标 26pt @3x 会被放大发糊`);
+  }
+});
