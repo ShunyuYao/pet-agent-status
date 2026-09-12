@@ -5,7 +5,7 @@
   "devDependencies": {
     "jsdom": "^25.0.0"
   },
-  "version": "0.12.2",
+  "version": "0.12.3",
   "scripts": {
     "test:aggregate": "node tests/aggregate-test.js",
     "test:app-launcher": "node tests/app-launcher-test.js",
