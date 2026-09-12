@@ -397,11 +397,11 @@ function createCollector(deps) {
 
   // 本机装了哪些 App → panel。载荷是**已过滤**的数组：没装的整条不在里面，
   // 一个都没装就是空数组（panel 据此整条不渲染 footer，连分隔线一起）。
-  // running 取自同一份快照的 agent 字段，零新增采集。
+  // 完成项数量取自同一份可见快照；点行收起后底栏也立即更新。
   function pushApps(pet, rows) {
     let apps = [];
     try {
-      apps = launcher.detect({ running: appLauncher.runningFromRows(rows) });
+      apps = launcher.detect({ pendingDone: appLauncher.pendingDoneFromRows(rows) });
     } catch (_) {
       apps = [];   // 探测整体失败 = 当作没装，面板少个便捷入口而已，绝不打断采集
     }
@@ -425,6 +425,13 @@ function createCollector(deps) {
   // 「收件人由主进程查登记」的精神）。
   function handleOpenApp(pet, data) {
     const id = data && data.appId;
+    if (!appLauncher.SUPPORTED_APPS.some((app) => app.id === id)) return;
+    // 按点击时的最新状态与列表顺序取第一条完成项。图标只标识厂牌，
+    // 真正落点由会话自己的 tty / App 导航信息决定，复用点行的收起与错误反馈。
+    const snapshot = tick(pet);
+    const completed = snapshot.rows.find((row) => row.state === 'done'
+      && appLauncher.AGENT_TO_APP[row.agent] === id);
+    if (completed) return handleJump(pet, { sessionId: completed.sessionId });
     try { launcher.open(id); } catch (_) { /* 已在模块内兜住，这里再收一道 */ }
   }
 

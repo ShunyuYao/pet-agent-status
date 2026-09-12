@@ -209,7 +209,7 @@ body:has(.applauncher[hidden]) .empty{padding-top:75px}
 /* 真实 App 图标本身自带圆角与配色，按钮只做承托与 hover 反馈 */
 .app-icon{position:relative;width:32px;height:32px;overflow:hidden}
 .app-icon img{position:absolute;width:125%;height:125%;left:-12.5%;top:-12.5%;display:block}
-/* 运行中绿点：右上角外沿，描边取面板底色把它从图标上「抠」出来 */
+/* 待查看完成项绿点（保留既有 class 名）：右上角外沿，描边取面板底色把它从图标上「抠」出来 */
 .app-run-dot{
   position:absolute;top:0;right:0;width:8px;height:8px;border-radius:50%;
   background:var(--success);border:1.5px solid var(--ink);
@@ -747,7 +747,7 @@ body:has(.applauncher[hidden]) .empty{padding-top:75px}
         btn.title = app.name;
         btn.setAttribute('aria-label', app.name);
         btn.appendChild(appIconEl(app.id));
-        if (app.running) {
+        if (app.pendingDone > 0) {
           var dot = document.createElement('span');
           dot.className = 'app-run-dot';
           btn.appendChild(dot);

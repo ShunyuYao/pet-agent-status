@@ -20,11 +20,14 @@ Figma：`UJimpWGl2hGkrbzxIVCAK5` 第 ⑤ 区（y≈1920 起）
 
 `panel.footer.hint`（"点击会话跳回终端 · 完成时宠物会提醒你"）换成一排可点 App 图标。
 
-- 未运行 → 拉起；已运行 → 切前台。两者都是 `open -b <bundleId>`（macOS 天然 activate 语义）
+- 无待查看完成项时：未运行 → 拉起；已运行 → 切前台（`open -b <bundleId>`）。
+- 有待查看完成项时：点图标或右上绿点，跳到列表顺序中的第一条该厂牌已完成会话，沿用会话行的导航与收起规则。有 tty 就定位终端，不按图标厂牌强制打开桌面 App；App 会话沿用已有深链接或激活兜底。
 - **图标水平居中**（autolayout `primaryAxisAlignItems:'CENTER'`），图标数量变化自动保持居中
 - 没装 → **整个图标不出现**，不做灰态（点不动的入口＝死链）
 - **一个都没装 → 底栏整条不出现**（连分隔线一起），见下节
-- 右上绿点 = 该 App 有会话在跑，数据取现成 snapshot 的 `agent` 字段，**零新增采集**
+- 右上绿点 = 该厂牌有尚未点掉的 `done` 展示态会话，数据取现成 snapshot，**零新增采集**。每次只收起一条，还有完成项就保留绿点；全部点完后熄灭。运行中、等待批准不点亮该绿点。直接点击会话行也同步更新绿点，新完成事件按现有规则重新出现。执行失败时保留完成项与绿点以便重试。
+
+以上交互语义由用户于 2026-09-12 明确修订，覆盖在线 Figma 中旧的 `running-dot` 命名；当日重新读取 `40:41` 设计原图和上下文，视觉素材、尺寸、位置仍以在线设计为准。
 
 ### 本机实测的 bundle id
 
@@ -61,7 +64,7 @@ Figma：`UJimpWGl2hGkrbzxIVCAK5` 第 ⑤ 区（y≈1920 起）
 - 分隔线 y=358（面板 420 高）→ 底栏带高 **62**（初稿 84，太宽）
 - 按钮 40×40，y=366；内层图片裁切框32×32、内缩4。源图片显示125%，偏移-12.5%，不改源图像素；静止时没有灰底承托
 - 三按钮 x=86/140/194、间距14、**水平居中**；数量变成2/1仍居中
-- 分隔线1px，距按钮顶7px；运行绿点8×8，相对按钮x=32/y=0
+- 分隔线1px，距按钮顶7px；完成绿点8×8，相对按钮x=32/y=0
 - 图标底 y=406，贴面板底 padding 14
 - 小标题「打开 App」删掉：占一整行且把视线拉到左边，与居中冲突
 
@@ -73,7 +76,7 @@ Figma：`UJimpWGl2hGkrbzxIVCAK5` 第 ⑤ 区（y≈1920 起）
 ## 实现落地（0.11.0）
 
 - `lib/app-launcher.js`：登记表（id/bundleId/name）+ 探测（mdfind 按 bundleId，5min 缓存）
-  + `open()`（只认登记表 id，bundleId 绝不来自调用方）+ `runningFromRows()`
+  + `open()`（只认登记表 id，bundleId 绝不来自调用方）+ `pendingDoneFromRows()`
 - `tool/index.js`：每轮 tick 推 `agent-status:apps`（已过滤数组），订阅 `agent-status:open-app`
 - `panel/panel.html`：底栏渲染 + 空数组整条 hidden
 - `lib/badge.js`：`segmentsFor` 空态改返回 `[{tone:'muted',text:''}]`（不再 null）

@@ -37,7 +37,7 @@ const html = fs.readFileSync(path.join(__dirname, '../panel/panel.html'), 'utf8'
     rolloutActivity: { activeThreads: () => new Map() }, workbuddySource: { tick() {} },
     threadTitles: { lookup: () => null }, terminalTitles: { lookup: () => null },
     claudeDesktop: { has: () => false, lookupTitle: () => null },
-    createAppLauncher: () => ({ detect: () => [{ id: 'codex', name: 'Codex', running: true }], open() {} }),
+    createAppLauncher: () => ({ detect: () => [{ id: 'codex', name: 'Codex', pendingDone: 1 }], open() {} }),
   });
   function mount() {
     dom?.window.close();

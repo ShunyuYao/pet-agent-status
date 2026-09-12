@@ -1127,9 +1127,9 @@ test('英文环境下隐藏说明也走词表', () => {
 test('启动器：装了的 App 渲染成可点图标，顺序即载荷顺序', () => {
   const p = mountPanel();
   p.push(tool.APPS_EVENT, { apps: [
-    { id: 'claude', bundleId: 'com.anthropic.claudefordesktop', name: 'Claude', running: false },
-    { id: 'codex', bundleId: 'com.openai.codex', name: 'Codex', running: false },
-    { id: 'workbuddy', bundleId: 'com.workbuddy.workbuddy', name: 'WorkBuddy', running: false }
+    { id: 'claude', bundleId: 'com.anthropic.claudefordesktop', name: 'Claude', pendingDone: 0 },
+    { id: 'codex', bundleId: 'com.openai.codex', name: 'Codex', pendingDone: 0 },
+    { id: 'workbuddy', bundleId: 'com.workbuddy.workbuddy', name: 'WorkBuddy', pendingDone: 0 }
   ] });
   assert.strictEqual(p.$('#applauncher').hidden, false, '有 App 时底栏要显示');
   const btns = p.$$('.app-btn');
@@ -1151,9 +1151,9 @@ test('启动器：装了的 App 渲染成可点图标，顺序即载荷顺序', 
 test('启动器：三个 App 的图标各不相同（不是同一张图顶替）', () => {
   const p = mountPanel();
   p.push(tool.APPS_EVENT, { apps: [
-    { id: 'claude', name: 'Claude', running: false },
-    { id: 'codex', name: 'Codex', running: false },
-    { id: 'workbuddy', name: 'WorkBuddy', running: false }
+    { id: 'claude', name: 'Claude', pendingDone: 0 },
+    { id: 'codex', name: 'Codex', pendingDone: 0 },
+    { id: 'workbuddy', name: 'WorkBuddy', pendingDone: 0 }
   ] });
   const srcs = p.$$('.app-btn img').map((i) => i.getAttribute('src'));
   assert.strictEqual(new Set(srcs).size, 3, '三个图标必须是三张不同的图');
@@ -1174,29 +1174,29 @@ test('启动器：一个都没装 → 整条底栏 hidden（连分隔线，不�
 test('启动器：没装的那个不出现（不是灰按钮）', () => {
   const p = mountPanel();
   p.push(tool.APPS_EVENT, { apps: [
-    { id: 'claude', name: 'Claude', running: false },
-    { id: 'workbuddy', name: 'WorkBuddy', running: false }
+    { id: 'claude', name: 'Claude', pendingDone: 0 },
+    { id: 'workbuddy', name: 'WorkBuddy', pendingDone: 0 }
   ] });
   assert.deepStrictEqual(p.$$('.app-btn').map((b) => b.dataset.appId), ['claude', 'workbuddy']);
   assert.strictEqual(p.$('.app-btn.is-codex'), null, 'Codex 没装就不该有节点');
   p.close();
 });
 
-test('启动器：running 的那个带绿点，其余没有', () => {
+test('启动器：有未查看完成项的带绿点，其余没有', () => {
   const p = mountPanel();
   p.push(tool.APPS_EVENT, { apps: [
-    { id: 'claude', name: 'Claude', running: true },
-    { id: 'codex', name: 'Codex', running: false }
+    { id: 'claude', name: 'Claude', pendingDone: 2 },
+    { id: 'codex', name: 'Codex', pendingDone: 0 }
   ] });
-  assert.ok(p.$('.app-btn.is-claude .app-run-dot'), 'running 的要有绿点');
-  assert.strictEqual(p.$('.app-btn.is-codex .app-run-dot'), null, '没跑的不该有绿点');
+  assert.ok(p.$('.app-btn.is-claude .app-run-dot'), '有完成项的要有绿点');
+  assert.strictEqual(p.$('.app-btn.is-codex .app-run-dot'), null, '无完成项不该有绿点');
   p.close();
 });
 
 test('启动器：点击发 open-app 意图，只带 appId（不带 bundleId）', () => {
   const p = mountPanel();
   p.push(tool.APPS_EVENT, { apps: [
-    { id: 'claude', bundleId: 'com.anthropic.claudefordesktop', name: 'Claude', running: false }
+    { id: 'claude', bundleId: 'com.anthropic.claudefordesktop', name: 'Claude', pendingDone: 0 }
   ] });
   p.$('.app-btn.is-claude').dispatchEvent(new p.dom.window.MouseEvent('click', { bubbles: true }));
   const ev = p.emitted.filter((e) => e.name === tool.OPEN_APP_EVENT);
@@ -1212,7 +1212,7 @@ test('启动器：点击发 open-app 意图，只带 appId（不带 bundleId）'
 
 test('启动器：重复推送不叠加节点（每次重画）', () => {
   const p = mountPanel();
-  const payload = { apps: [{ id: 'claude', name: 'Claude', running: false }] };
+  const payload = { apps: [{ id: 'claude', name: 'Claude', pendingDone: 0 }] };
   p.push(tool.APPS_EVENT, payload);
   p.push(tool.APPS_EVENT, payload);
   p.push(tool.APPS_EVENT, payload);
@@ -1222,7 +1222,7 @@ test('启动器：重复推送不叠加节点（每次重画）', () => {
 
 test('启动器：从有到无会收起底栏（App 被卸载的路径）', () => {
   const p = mountPanel();
-  p.push(tool.APPS_EVENT, { apps: [{ id: 'claude', name: 'Claude', running: false }] });
+  p.push(tool.APPS_EVENT, { apps: [{ id: 'claude', name: 'Claude', pendingDone: 0 }] });
   assert.strictEqual(p.$('#applauncher').hidden, false);
   p.push(tool.APPS_EVENT, { apps: [] });
   assert.strictEqual(p.$('#applauncher').hidden, true, '装的 App 没了要收起，不能留空带');

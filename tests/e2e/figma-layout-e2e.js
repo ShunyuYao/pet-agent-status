@@ -123,6 +123,7 @@ async function run() {
       const data=Buffer.from(b.src.split(',')[1],'base64');
       const expected=fs.readFileSync(path.join(__dirname,'../../assets',`app-${b.id}.png`));
       check(name+' exact packaged asset',crypto.createHash('sha256').update(data).digest('hex'),crypto.createHash('sha256').update(expected).digest('hex'));
+      check(name+' completion dot',!!b.dot,b.id==='codex');
       if(b.dot){check(name+' dot x',b.dot.x-b.box.x,32,0.02);check(name+' dot y',b.dot.y-b.box.y,0,0.02);check(name+' dot size',b.dot.w,8,0.02);}
     }
     for(const b of m.headerButtons){check('header hit width',b.box.w,22);check('header icon width',b.icon.w,13);}

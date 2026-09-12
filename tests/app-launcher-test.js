@@ -8,7 +8,7 @@
 //   ④ 顺序固定 claude → codex → workbuddy（不按「有无会话」动态排，位置不许跳）
 //   ⑤ Codex 认的是 **bundleId com.openai.codex**，实测解析到 ChatGPT.app，
 //      不存在独立的 Codex.app；按路径找会永远判「没装」
-//   ⑥ running 标记来自现成 snapshot 的 agent 字段，零新增采集
+//   ⑥ pendingDone 计数来自现成 snapshot 的 agent 字段，零新增采集
 //   ⑦ 探测失败（mdfind 挂了/超时）静默降级为「没装」，绝不抛、绝不打死采集器
 //   ⑧ 打开：未运行→拉起、已运行→切前台，都是 open -b <bundleId>；
 //      只接受登记表里的 bundleId，任意字符串不许进 open 的参数
@@ -70,9 +70,9 @@ test('一个都没装 → 空数组（UI 据此整条不渲染 footer）', () =>
 test('顺序固定 claude → codex → workbuddy（不按有无会话动态排）', () => {
   const L = createAppLauncher({ probe: detectorOf([WORKBUDDY, CODEX, CLAUDE]) });
   assert.deepStrictEqual(L.detect().map((a) => a.id), ['claude', 'codex', 'workbuddy']);
-  // 即便 workbuddy 有会话在跑，位置也不许提前（位置跳动会毁掉肌肉记忆）
-  const withRun = L.detect({ running: { workbuddy: true } });
-  assert.deepStrictEqual(withRun.map((a) => a.id), ['claude', 'codex', 'workbuddy']);
+  // 即便 workbuddy 有多个完成项，位置也不许提前（位置跳动会毁掉肌肉记忆）
+  const withDone = L.detect({ pendingDone: { workbuddy: 2 } });
+  assert.deepStrictEqual(withDone.map((a) => a.id), ['claude', 'codex', 'workbuddy']);
 });
 
 // ---- ⑤ Codex 按 bundleId 认，不按 Codex.app 路径 ----
@@ -84,24 +84,24 @@ test('Codex 按 bundleId com.openai.codex 认（实测解析到 ChatGPT.app）',
   assert.deepStrictEqual(L.detect().map((a) => a.id), ['codex']);
 });
 
-// ---- ⑥ running 标记来自 snapshot 的 agent ----
-test('running 标记由传入的 running 映射决定（取自现成 snapshot.agent）', () => {
+// ---- ⑥ pendingDone 计数来自 snapshot 的 agent ----
+test('pendingDone 计数由传入的 pendingDone 映射决定（取自现成 snapshot.agent）', () => {
   const L = createAppLauncher({ probe: detectorOf([CLAUDE, WORKBUDDY]) });
-  const apps = L.detect({ running: { claude: true } });
-  assert.strictEqual(apps.find((a) => a.id === 'claude').running, true);
-  assert.strictEqual(apps.find((a) => a.id === 'workbuddy').running, false, '没跑的必须是 false 不是 undefined');
+  const apps = L.detect({ pendingDone: { claude: 2 } });
+  assert.strictEqual(apps.find((a) => a.id === 'claude').pendingDone, 2);
+  assert.strictEqual(apps.find((a) => a.id === 'workbuddy').pendingDone, 0, '无完成项必须为 0');
 });
 
-test('runningFromRows：把快照行的 agent 折成 {claude,codex,workbuddy}', () => {
+test('pendingDoneFromRows：只统计展示为 done 的完成项，包含 CLI 与 App', () => {
   const rows = [
-    { agent: 'claude-code', state: 'running' },
-    { agent: 'workbuddy', state: 'done' },      // 终态不算「在跑」
-    { agent: 'codex', state: 'waiting' }        // 等批准也算占用着这个 App
+    { agent: 'claude-code', state: 'done', tty: '/dev/ttys001' },
+    { agent: 'claude-code', state: 'done', form: 'app' },
+    { agent: 'workbuddy', state: 'done' },
+    ...['running', 'waiting', 'idle', 'error', 'unknown'].map(state => ({ agent: 'codex', state })),
+    null, { agent: 'unknown', state: 'done' }
   ];
-  const r = launcher.runningFromRows(rows);
-  assert.strictEqual(r.claude, true);
-  assert.strictEqual(r.codex, true, 'waiting 也算在跑（用户要去处理它）');
-  assert.strictEqual(r.workbuddy, false, 'done 不算在跑');
+  assert.deepStrictEqual(launcher.pendingDoneFromRows(rows), { claude: 2, codex: 0, workbuddy: 1 });
+  assert.deepStrictEqual(launcher.pendingDoneFromRows(null), { claude: 0, codex: 0, workbuddy: 0 });
 });
 
 // ---- ⑦ 探测失败静默降级 ----
