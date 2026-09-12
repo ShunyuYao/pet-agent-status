@@ -155,7 +155,8 @@ async function waitFor(fn, label, tries = 60) {
       const n = await evalIn(panel, `return document.querySelectorAll('.row[data-session-id="${sid}"]').length;`);
       return n === 0 ? true : null;
     }, '点击后该行从面板收起').catch(() => false);
-    ok(gone === true, '点完就收起：已完成的行点击后从面板消失');
+    const jumpError = gone ? '' : await evalIn(panel, `return document.querySelector('.jump-error')?.textContent || '';`);
+    ok(gone === true, '点完就收起：已完成的行点击后从面板消失', jumpError);
 
     // ---- 5. 该会话又有新动静 → 自动复现（已读语义，不是删除）----
     fs.writeFileSync(path.join(stateDir, `${sid}.json`), JSON.stringify({
@@ -166,7 +167,7 @@ async function waitFor(fn, label, tries = 60) {
       const r = await evalIn(panel, `
         const el = document.querySelector('.row[data-session-id="${sid}"]');
         return el ? el.className : null;`);
-      return r || null;
+      return r && /state-running/.test(r) ? r : null;
     }, '新动静后该行复现').catch(() => null);
     ok(revived && /state-running/.test(revived), '有新动静时收起的行自动复现（已读而非删除）', String(revived));
 

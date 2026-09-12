@@ -31,6 +31,7 @@ const TICK_MS = 2000;                            // 宿主把最小间隔钳到 
 // 改一处必须改两处；tests/panel-dom-test.js 与 tool-lifecycle-test.js 各自断言了名字，
 // 漂移会在门禁里红。
 const SNAPSHOT_EVENT = 'agent-status:snapshot';
+const PANEL_READY_EVENT = 'agent-status:panel-ready';          // panel → tool：订阅完成，立即回放当前视图
 const LOCALE_EVENT = 'agent-status:locale';
 const INSTALL_STATE_EVENT = 'agent-status:install-state';   // tool → panel：接入与否
 const INSTALL_CLAUDE_EVENT = 'agent-status:install-claude';   // panel → tool：接入意图
@@ -132,6 +133,9 @@ function createCollector(deps) {
 
   let taskId = null;
   let lastSnapshot = { rows: [], summary: { running: 0, waiting: 0, total: 0, unknown: 0 } };
+  let hasSnapshot = false;
+  let lastInstallState = null;
+  let lastApps = null;
 
   // ---- 跳转（US-005）----
   // psTree/runner 可注入：测试绝不 spawn ps、更不真跑 osascript（会骚扰真实桌面）。
@@ -359,6 +363,7 @@ function createCollector(deps) {
       // locale 随快照下发，panel 据此选词表（契约仍是 {rows, summary}，locale 是附加字段）
       result.locale = locale;
       lastSnapshot = result;
+      hasSnapshot = true;
       emit(pet, SNAPSHOT_EVENT, result);
       // 接入态随每轮一起推：面板是随开随关的，start 时推一次的话，
       // 之后才打开的面板永远等不到这条，空态会一直停在「一键接入」——
@@ -385,8 +390,9 @@ function createCollector(deps) {
     let codex = false;
     try { codex = codexInstaller.isInstalled(codexOpts); } catch (_) { codex = false; }
     // 两个厂牌各一个开关，panel 各画各的（载荷仍是同一个事件，加字段不改契约）
-    emit(pet, INSTALL_STATE_EVENT, { claude, codex });
-    return { claude, codex };
+    lastInstallState = { claude, codex };
+    emit(pet, INSTALL_STATE_EVENT, lastInstallState);
+    return lastInstallState;
   }
 
   // 本机装了哪些 App → panel。载荷是**已过滤**的数组：没装的整条不在里面，
@@ -399,8 +405,19 @@ function createCollector(deps) {
     } catch (_) {
       apps = [];   // 探测整体失败 = 当作没装，面板少个便捷入口而已，绝不打断采集
     }
-    emit(pet, APPS_EVENT, { apps });
+    lastApps = { apps };
+    emit(pet, APPS_EVENT, lastApps);
     return apps;
+  }
+
+  // 面板每次开窗都是新 renderer；启动时推送过并不代表它收到过。
+  // 回放内存中的最近一轮，不做磁盘/进程/App 探测，也不重复触发宠物提醒。
+  // 首轮尚未完成时不回放占位空快照，等正常 tick 给真实结果。
+  function replayPanel(pet) {
+    if (lastInstallState) emit(pet, INSTALL_STATE_EVENT, lastInstallState);
+    pushSettingsState(pet);
+    if (lastApps) emit(pet, APPS_EVENT, lastApps);
+    if (hasSnapshot) emit(pet, SNAPSHOT_EVENT, lastSnapshot);
   }
 
   // 打开 App 意图。**appId 只当索引用**：真正进 `open -b` 的 bundleId 由
@@ -437,6 +454,7 @@ function createCollector(deps) {
   async function start(pet) {
     if (taskId != null) return taskId;   // 启停串行，不重复注册（重复注册 = 泄漏定时器）
     // 先接意图再起定时器：面板可能在 tick 之前就点了接入
+    subscribe(pet, PANEL_READY_EVENT, () => replayPanel(pet));
     subscribe(pet, INSTALL_CLAUDE_EVENT, () => handleInstall(pet));
     subscribe(pet, UNINSTALL_CLAUDE_EVENT, () => handleUninstall(pet));
     subscribe(pet, INSTALL_CODEX_EVENT, () => handleInstallCodex(pet));
@@ -456,7 +474,7 @@ function createCollector(deps) {
     // 直接存 Promise 会让 cancel 拿到个对象、恒 miss，旧定时器永不回收（宿主已知坑）。
     await syncCodexIpc(pet);
     taskId = await pet.scheduler.every(TICK_MS, () => tick(pet));
-    tick(pet);   // 立刻来一轮，用户开面板不用等 2 秒
+    tick(pet);   // 预备首轮；之后新开的面板经 panel-ready 立即取这份结果
     return taskId;
   }
 
@@ -519,7 +537,7 @@ async function deactivate(pet) {
 module.exports = {
   activate, deactivate, createCollector,
   isPidAlive, TICK_MS,
-  SNAPSHOT_EVENT, LOCALE_EVENT, INSTALL_STATE_EVENT, INSTALL_CLAUDE_EVENT, UNINSTALL_CLAUDE_EVENT,
+  SNAPSHOT_EVENT, PANEL_READY_EVENT, LOCALE_EVENT, INSTALL_STATE_EVENT, INSTALL_CLAUDE_EVENT, UNINSTALL_CLAUDE_EVENT,
   INSTALL_CODEX_EVENT, UNINSTALL_CODEX_EVENT,
   JUMP_EVENT, JUMP_ERROR_TTL_MS,
   SETTINGS_STATE_EVENT, SET_SETTING_EVENT, IPC_ENABLED_KEY,
