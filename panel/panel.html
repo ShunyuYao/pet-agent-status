@@ -368,6 +368,7 @@ body:has(.applauncher[hidden]) .empty{padding-top:75px}
 (function () {
   // ---- 事件名（与 tool 侧同一套前缀，改一处必须改两处） ----
   var EV_SNAPSHOT = 'agent-status:snapshot';
+  var EV_PANEL_READY = 'agent-status:panel-ready';
   var EV_INSTALL_STATE = 'agent-status:install-state';
   var EV_INSTALL_CLAUDE = 'agent-status:install-claude';
   var EV_UNINSTALL_CLAUDE = 'agent-status:uninstall-claude';
@@ -906,9 +907,10 @@ body:has(.applauncher[hidden]) .empty{padding-top:75px}
     paintIpcStatus();
   });
 
-  // 首帧：先按空态渲染，等 tool 的第一份快照（tool 侧 start() 会立刻推一轮）
-  // 首帧占位：ready 仍为 false，因此不画接入引导（见 render 里的三态说明）
+  // 先占位，所有监听就绪后再请求 tool 回放当前结果；不等下一轮 2s 采集。
+  // 请求放在 render 之后，避免同步回放被这张占位快照覆盖。
   render({ rows: [], summary: { running: 0 } });
+  emit(EV_PANEL_READY, {});
 })();
 </script>
 </body>

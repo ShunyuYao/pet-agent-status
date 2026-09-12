@@ -26,15 +26,17 @@
     "test:terminal-titles": "node tests/terminal-titles-test.js",
     "test:tool-lifecycle": "node tests/tool-lifecycle-test.js",
     "test:workbuddy-source": "node tests/workbuddy-source-test.js",
-    "test:offline": "npm run test:aggregate && npm run test:app-launcher && npm run test:badge && npm run test:claude-desktop-sessions && npm run test:claude-hook && npm run test:claude-installer && npm run test:codex-app-ingest && npm run test:codex-hook && npm run test:codex-ipc && npm run test:codex-rollout-activity && npm run test:codex-thread-titles && npm run test:nested-session && npm run test:node-bin && npm run test:panel-dom && npm run test:state-files && npm run test:terminal-jump && npm run test:terminal-titles && npm run test:tool-lifecycle && npm run test:workbuddy-source",
+    "test:offline": "npm run test:aggregate && npm run test:app-launcher && npm run test:badge && npm run test:claude-desktop-sessions && npm run test:claude-hook && npm run test:claude-installer && npm run test:codex-app-ingest && npm run test:codex-hook && npm run test:codex-ipc && npm run test:codex-rollout-activity && npm run test:codex-thread-titles && npm run test:nested-session && npm run test:node-bin && npm run test:panel-bootstrap && npm run test:panel-dom && npm run test:state-files && npm run test:terminal-jump && npm run test:terminal-titles && npm run test:tool-lifecycle && npm run test:workbuddy-source",
     "test:dismiss": "node tests/e2e/dismiss-e2e.js",
     "test:figma-layout": "node tests/e2e/figma-layout-e2e.js",
     "test:panel-scroll": "node tests/e2e/panel-scroll-e2e.js",
     "test:ui-parity": "node tests/e2e/ui-parity-e2e.js",
     "test:waiting-accuracy": "node tests/e2e/waiting-accuracy-e2e.js",
-    "test:ui-e2e": "npm run test:figma-layout && npm run test:ui-parity && npm run test:app-launcher-e2e && npm run test:dismiss && npm run test:waiting-accuracy && npm run test:panel-scroll",
+    "test:ui-e2e": "npm run test:figma-layout && npm run test:ui-parity && npm run test:app-launcher-e2e && npm run test:dismiss && npm run test:waiting-accuracy && npm run test:panel-scroll && npm run test:panel-open",
     "test:app-launcher-e2e": "node tests/e2e/app-launcher-e2e.js",
     "test:ui": "npm run test:offline && npm run test:ui-e2e",
-    "test": "npm run test:offline"
+    "test": "npm run test:offline",
+    "test:panel-bootstrap": "node tests/panel-bootstrap-test.js",
+    "test:panel-open": "node tests/e2e/panel-open-e2e.js"
   }
 }

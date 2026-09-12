@@ -86,8 +86,9 @@ function mountPanel(opts) {
     }
   });
   const doc = dom.window.document;
+  const bootEmitted = emitted.splice(0); // 挂载握手与后续用户点击分开计数。
   return {
-    dom, doc, emitted, closed, copied,
+    dom, doc, emitted, bootEmitted, closed, copied,
     push(name, data) {
       const fn = handlers.get(name);
       assert.ok(fn, `panel 没有订阅事件 ${name}`);
@@ -871,6 +872,7 @@ test('panel 与 tool 的事件名常量逐字一致（两份副本的漂移守�
   const script = inlineScript();
   const pairs = [
     ['EV_SNAPSHOT', tool.SNAPSHOT_EVENT],
+    ['EV_PANEL_READY', tool.PANEL_READY_EVENT],
     ['EV_INSTALL_STATE', tool.INSTALL_STATE_EVENT],
     ['EV_INSTALL_CLAUDE', tool.INSTALL_CLAUDE_EVENT],
     ['EV_UNINSTALL_CLAUDE', tool.UNINSTALL_CLAUDE_EVENT]
@@ -882,6 +884,12 @@ test('panel 与 tool 的事件名常量逐字一致（两份副本的漂移守�
   }
   // 跳转事件名 tool 侧还没有（US-005），先锁住 panel 这一侧的取值
   assert.ok(/var EV_JUMP = 'agent-status:jump';/.test(script));
+});
+
+test('面板挂载完成主动请求当前视图（不等下一轮采集）', () => {
+  const p = mountPanel();
+  assert.deepStrictEqual(p.bootEmitted.map(e => e.name), [tool.PANEL_READY_EVENT]);
+  p.close();
 });
 
 // ---- 收尾 ----

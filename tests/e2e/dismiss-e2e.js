@@ -62,7 +62,8 @@ const waitFor = (fn, label, tries = 120) => currentHost.waitFor(fn, label, tries
       const n = await evalIn(panel, `return document.querySelectorAll('.row[data-session-id="${sid}"]').length;`);
       return n === 0 ? true : null;
     }, '点击后该行从面板收起').catch(() => false);
-    ok(gone === true, '点完就收起：已完成的行点击后从面板消失');
+    const jumpError = gone ? '' : await evalIn(panel, `return document.querySelector('.jump-error')?.textContent || '';`);
+    ok(gone === true, '点完就收起：已完成的行点击后从面板消失', jumpError);
     const actions = fs.readFileSync(host.paths.actions, 'utf8');
     ok(actions.includes('osascript') && actions.includes('/dev/ttys901'), '真实跳转路径生成当前终端命令（隔离记录，不激活终端）');
 
@@ -75,7 +76,7 @@ const waitFor = (fn, label, tries = 120) => currentHost.waitFor(fn, label, tries
       const r = await evalIn(panel, `
         const el = document.querySelector('.row[data-session-id="${sid}"]');
         return el ? el.className : null;`);
-      return r || null;
+      return r && /state-running/.test(r) ? r : null;
     }, '新动静后该行复现').catch(() => null);
     ok(revived && /state-running/.test(revived), '有新动静时收起的行自动复现（已读而非删除）', String(revived));
 

@@ -392,6 +392,7 @@ function mountPanel() {
       Object.defineProperty(win.navigator, 'language', { value: 'zh-CN', configurable: true });
     }
   });
+  emitted.length = 0; // 挂载时的 panel-ready 握手不计入后续点击意图。
   return {
     dom, emitted,
     doc: dom.window.document,
