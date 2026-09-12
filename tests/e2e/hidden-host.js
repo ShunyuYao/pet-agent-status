@@ -168,6 +168,7 @@ async function start(options = {}) {
   process.on('exit', emergencyCleanup);
   async function launch() {
     stopping = false;
+    const logOffset = fs.statSync(paths.log).size;
     cdpPort = await freePort(); harness.port = cdpPort;
     const executable = path.join(hostDir, 'demo', 'node_modules', '.bin', 'electron');
     const env = { ...process.env, PET_E2E_TEST: '1', PET_E2E_BACKGROUND: '1', PET_E2E_HIDDEN: '1', PET_USERDATA_DIR: paths.userData, PET_AGENT_STATUS_DIR: paths.state, PET_AS_E2E_FIXTURE: paths.fixture, PET_AS_WORKBUDDY_HOME: paths.workbuddy, PET_AS_CLAUDE_APP_SUPPORT: paths.claudeApp, PET_AS_CLAUDE_SETTINGS: paths.claudeSettings, PET_AS_CODEX_HOOKS: paths.codexHooks };
@@ -177,6 +178,13 @@ async function start(options = {}) {
     for (const stream of [app.stdout, app.stderr]) stream.on('data', (data) => fs.appendFileSync(paths.log, data));
     app.on('error', (error) => fs.appendFileSync(paths.log, error.stack + '\n'));
     app.on('exit', (code, signal) => { if (!stopping) fs.appendFileSync(paths.log, `Host exited: ${code}/${signal}\n`); });
+    // Do not enable Runtime during Electron's sandbox preload initialization.
+    // Observe this launch's renderer-ready marker first; retain all console errors.
+    await waitFor(() => fs.readFileSync(paths.log).subarray(logOffset).toString().includes('[renderer] frames loaded '), 'host renderer initialized', 45000);
+    const startupLog = fs.readFileSync(paths.log).subarray(logOffset).toString();
+    if (/sandboxed_renderer\.bundle\.js script failed|TypeError: Cannot destructure property 'preloadScripts'/.test(startupLog)) {
+      throw new Error('Host sandbox preload failed before CDP connection; see host.log');
+    }
     harness.pet = await waitFor(() => harness.findTarget('demo/index.html'), 'hidden host CDP', 45000);
     await harness.evaluate("window.petAPI.openSettings('plugins')", harness.pet);
     harness.settings = await waitFor(() => harness.findTarget('settings.html'), 'settings target');

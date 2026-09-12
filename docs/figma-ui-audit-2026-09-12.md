@@ -38,3 +38,9 @@ Figma和Chromium文字抗锯齿不同，不以整张PNG字节相等作为验收�
 [对比图](design/parity-2026-09-12/comparison.png)左起为在线Figma、修改前、修改后。测试多放一条Codex App会话，额外验证App角标；状态文案和汇总来自真实采集结果。
 
 同目录保存设计原图、前后会话/空态截图、接入后截图、失败与通过的逐项数值，以及字体取证。主分支整合后的回归结果在交付时另行报告。
+
+## 宿主测试启动时序
+
+首次主分支复核的两次重启，插件几何、字体、接入和持久化断言均通过，但宿主 `demo/index.html` 在输出渲染就绪日志之前发生 `binding.startupData=null` 的sandbox初始化异常，门禁据此失败。两条console记录来自同一次初始化失败，没有过滤或忽略它们。
+
+测试helper现按每次启动的日志字节偏移，等待新的 `frames loaded`（宿主preload/API与资源完成后的真实就绪信号）再接入CDP；并单独检查接入前的原始host.log，防止延迟订阅漏掉初始化错误。此调整后的同一路径200项全部通过，原始host.log也无该异常。观察支持启动时序解释，但不声称已修改或定位Electron内部根因。宿主产品代码未改。原始失败事件保存在同目录 `initialization-failure.jsonl`。
