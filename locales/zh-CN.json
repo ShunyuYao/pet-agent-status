@@ -25,6 +25,7 @@
   "jump.unavailable": "找不到这个会话的终端",
   "panel.close": "关闭",
   "panel.footer.hint": "点击会话跳回终端 · 完成时宠物会提醒你",
+  "panel.footer.hidden": "另有 {n} 个后台会话未显示（没有可跳转的窗口）",
   "panel.summary.done": "{n} 已完成",
   "panel.summary.running": "{n} 运行中",
   "panel.summary.waiting": "{n} 等待批准",

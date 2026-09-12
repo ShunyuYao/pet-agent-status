@@ -360,6 +360,7 @@ body{
       'panel.summary.waiting': '{n} 等待批准',
       'panel.summary.done': '{n} 已完成',
       'panel.footer.hint': '点击会话跳回终端 · 完成时宠物会提醒你',
+      'panel.footer.hidden': '另有 {n} 个后台会话未显示（没有可跳转的窗口）',
       'empty.title': '还没有正在进行的会话',
       'empty.desc1': '接入 Claude Code 钩子后，会话状态会自动出现在这里。',
       'empty.desc2': '任务完成或等待批准时，宠物会提醒你。',
@@ -395,6 +396,7 @@ body{
       'panel.summary.waiting': '{n} waiting',
       'panel.summary.done': '{n} done',
       'panel.footer.hint': "Click a session to jump back · your pet pings you when it's done",
+      'panel.footer.hidden': '{n} background session(s) hidden — nowhere to jump to',
       'empty.title': 'No sessions yet',
       'empty.desc1': 'Install the Claude Code hooks and sessions will show up here.',
       'empty.desc2': 'Your pet will ping you when a task finishes or needs approval.',
@@ -732,6 +734,13 @@ body{
         elList.appendChild(err);
       }
     }
+
+    // 按落点过滤隐藏了几条，就如实说几条（2026-09-12）。会话凭空消失比多显示一行更糟：
+    // 用户会以为插件坏了。没有隐藏时不平白多一句话。
+    var hidden = Number(summary.hiddenNoTarget) || 0;
+    $('footer').textContent = hidden > 0
+      ? t('panel.footer.hint') + ' · ' + t('panel.footer.hidden', { n: hidden })
+      : t('panel.footer.hint');
 
     // 汇总胶囊：最多同屏两个状态段，优先级 waiting > running > done ——
     // 与徽标（lib/badge.js#segmentsFor）同一条取舍规则，两处显示的内容一致。

@@ -106,7 +106,13 @@ function snapshotOf(recs, over) {
   const dir = tmp();
   for (const r of recs) sf.writeStatus(r, dir);
   return agg.aggregate(sf.readSnapshots(dir),
-    Object.assign({ now: T0, isPidAlive: () => true, t }, over));
+    // 与生产同构：tool 侧注入的「无 tty 行有没有 App 落点」判定（codex 深链接 || Claude App）。
+    // 不注入的话，2026-09-12「按落点过滤」会把所有 App 任务行当成点不进去而隐藏，
+    // 这些用例测的却是 App 行怎么渲染——夹具必须跟生产一样给出落点判定。
+    Object.assign({
+      now: T0, isPidAlive: () => true, t,
+      canJumpWithoutTty: (row) => require(path.join(ROOT, 'lib', 'codex-deeplink.js')).pickNavigator(row) != null
+    }, over));
 }
 // 夹具默认**每个会话一个终端窗口**：同一个 tty 上的旧会话会被同窗顶替规则收起
 // （lib/aggregate.js#supersedeSameTerminal，2026-09-12），而这些用例测的是状态推导/
@@ -491,7 +497,10 @@ test('厂牌徽标：Claude 陶土底 / Codex 黑底，主图标用官方 path�
   const snap = snapshotOf([
     rec({ sessionId: 'c', agent: 'claude-code', ts: T0 }),
     rec({ sessionId: 'x', agent: 'codex', ts: T0 - 1000 }),
-    rec({ sessionId: 'w', agent: 'workbuddy', form: 'app', tty: null, ts: T0 - 2000 })
+    // WorkBuddy 行的 sessionId 必须是 UUID 形态：深链接 workbuddy://chat/<uuid> 只接受
+    // 合法 UUID（lib/codex-deeplink.js 的防注入白名单），脏 id 拿不到落点，
+    // 2026-09-12「按落点过滤」起会整行隐藏——夹具要和生产同构。
+    rec({ sessionId: '2f5c1e90-0b7a-4f3d-9a11-7c6d5e4b3a21', agent: 'workbuddy', form: 'app', tty: null, ts: T0 - 2000 })
   ]);
   const p = mountPanel();
   p.push('agent-status:snapshot', snap);
@@ -503,15 +512,16 @@ test('厂牌徽标：Claude 陶土底 / Codex 黑底，主图标用官方 path�
   assert.strictEqual(badgeOf('c').querySelector('svg path').getAttribute('d'), svgPathOf('claude.svg'));
   assert.strictEqual(badgeOf('x').querySelector('svg path').getAttribute('d'), svgPathOf('openai.svg'));
   // WorkBuddy：栅格产品图（内联 data URI），不是 SVG path 也不是字母占位
-  assert.ok(badgeOf('w').classList.contains('is-workbuddy'));
-  const wbImg = badgeOf('w').querySelector('img');
+  const WB = '2f5c1e90-0b7a-4f3d-9a11-7c6d5e4b3a21';
+  assert.ok(badgeOf(WB).classList.contains('is-workbuddy'));
+  const wbImg = badgeOf(WB).querySelector('img');
   assert.ok(wbImg, 'WorkBuddy 徽标必须是 img');
   assert.ok(wbImg.getAttribute('src').startsWith('data:image/png;base64,'), '图必须内联（零远程资源红线）');
-  assert.strictEqual(badgeOf('w').querySelector('svg'), null);
+  assert.strictEqual(badgeOf(WB).querySelector('svg'), null);
   // 形态角标：CLI（>_）与 App 各归各
   assert.strictEqual(badgeOf('c').querySelector('.form-badge').dataset.form, 'cli');
   assert.strictEqual(badgeOf('c').querySelector('.form-badge').textContent, '>_');
-  assert.strictEqual(badgeOf('w').querySelector('.form-badge').dataset.form, 'app');
+  assert.strictEqual(badgeOf(WB).querySelector('.form-badge').dataset.form, 'app');
   p.close();
 });
 
@@ -1042,5 +1052,41 @@ test('titleFor 注入链贯通：解析出的线程标题渲染进行主标签',
   );
   p.push(tool.SNAPSHOT_EVENT, snap);
   assert.strictEqual(p.$('.row .project').textContent, '查找 Codex 宠物多会话管理');
+  p.close();
+});
+
+// ---- 按落点过滤：隐藏了几条要如实说出来（2026-09-12）----
+// 会话凭空消失比多显示一行更糟——用户会以为插件坏了。底部提示要明说藏了几条、为什么。
+
+test('有被隐藏的后台会话时，底部提示如实说明条数', () => {
+  const p = mountPanel();
+  const snap = snapshotOf([
+    rec({ sessionId: 'term', tty: '/dev/ttys001', ts: T0 }),
+    rec({ sessionId: 'bg1', tty: null, ts: T0 }),      // Ralph 形态：无 tty 无 App 落点
+    rec({ sessionId: 'bg2', tty: null, ts: T0 }),
+  ]);
+  assert.strictEqual(snap.summary.hiddenNoTarget, 2, '前置：应当隐藏两条');
+  p.push('agent-status:snapshot', snap);
+  const footer = p.$('#footer').textContent;
+  assert.ok(/2/.test(footer), `底部提示要说出条数，实际: ${footer}`);
+  assert.ok(/后台|隐藏|跳/.test(footer), `要说清为什么被隐藏，实际: ${footer}`);
+  p.close();
+});
+
+test('没有被隐藏的会话时，底部提示保持原样（不平白多一句话）', () => {
+  const p = mountPanel();
+  p.push('agent-status:snapshot', snapshotOf([rec({ sessionId: 'term', tty: '/dev/ttys001', ts: T0 })]));
+  assert.strictEqual(p.$('#footer').textContent, '点击会话跳回终端 · 完成时宠物会提醒你');
+  p.close();
+});
+
+test('英文环境下隐藏提示也走词表', () => {
+  const p = mountPanel({ language: 'en' });
+  p.push('agent-status:snapshot', snapshotOf([
+    rec({ sessionId: 'term', tty: '/dev/ttys001', ts: T0 }),
+    rec({ sessionId: 'bg1', tty: null, ts: T0 }),
+  ]));
+  const footer = p.$('#footer').textContent;
+  assert.ok(/1/.test(footer) && /[A-Za-z]/.test(footer) && !/后台/.test(footer), `实际: ${footer}`);
   p.close();
 });

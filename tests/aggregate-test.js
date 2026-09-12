@@ -310,7 +310,11 @@ test('summary 计数与行一致', () => {
     rec({ sessionId: 'w1', state: 'waiting', lastEvent: 'Notification', ts: T0 })
   ]);
   const { summary } = run(snap);
-  assert.deepStrictEqual(summary, { running: 2, waiting: 1, done: 0, total: 3, unknown: 0, focus: { sessionId: 'w1', state: 'waiting', project: 'demo' } });
+  // 逐字段全等：summary 是 panel/徽标/联动的共同契约，加字段必须在这里同步声明
+  assert.deepStrictEqual(summary, {
+    running: 2, waiting: 1, done: 0, total: 3, unknown: 0, hiddenNoTarget: 0,
+    focus: { sessionId: 'w1', state: 'waiting', project: 'demo' }
+  });
 });
 
 // 2026-09-11：summary 增加 done 计数（胶囊/徽标要显示「刚办完几件」，原来 done 不进汇总）。
@@ -679,8 +683,10 @@ test('App 行（form app、无 tty、合法 threadId）canJump=true；threadId �
   const app = rows.find((r) => r.sessionId === APP_CID);
   assert.strictEqual(app.form, 'app');
   assert.strictEqual(app.canJump, true, 'App 行有合法 threadId 就该有深链接入口');
+  // 「无 tty 无 threadId 不给假入口」这条保证仍在，而且更强了：
+  // 2026-09-12「按落点过滤」起，这种一个落点都没有的行**整行都不显示**（不只是不给入口）。
   const bare = rows.find((r) => r.sessionId === 'no-thread');
-  assert.strictEqual(bare.canJump, false, '无 tty 无 threadId 不给假入口');
+  assert.strictEqual(bare, undefined, '一个落点都没有的行应整行隐藏');
 });
 
 // ---- 8. unknown 的两个来源，副行文案必须分开（2026-09-11 用户反馈）----
@@ -902,7 +908,11 @@ test('tty 为 null 的 App 任务各自独立，绝不互相顶掉', () => {
     { agent: 'claude-code', sessionId: 'ccapp', cwd: '/w/x', tty: null, pid: 999,
       state: 'done', lastEvent: 'Stop', ts: T0 - 1 * MIN },
   ]);
-  const rows = agg.aggregate(snap, { now: T0, isPidAlive: () => true, t }).rows;
+  // 与生产同构：无 tty 行的落点判定由 tool 注入（codex 深链接 || Claude App 归属）。
+  // 不注入的话这三条会先被「按落点过滤」拿走，就测不到同窗顶替这件事了。
+  const rows = agg.aggregate(snap, {
+    now: T0, isPidAlive: () => true, t, canJumpWithoutTty: () => true
+  }).rows;
   assert.deepStrictEqual(rows.map((r) => r.sessionId).sort(), ['app1', 'app2', 'ccapp'],
     '无 tty 的行不属于任何终端窗口，不适用同窗顶替');
 });
@@ -918,4 +928,76 @@ test('同一 tty 上两条都还活着（分屏/异常残留）：都保留，�
   const rows = agg.aggregate(snap, { now: T0, isPidAlive: () => true, t }).rows;
   assert.deepStrictEqual(rows.map((r) => r.sessionId).sort(), ['r1', 'r2'],
     '现役会话一律保留——顶掉一个正在等你批准的会话是丢信息');
+});
+
+// ---- 11. 按落点过滤：点不进去的后台会话不显示（2026-09-12 用户拍板）----
+//
+// 原则（用户原话）：面板里的一条，点下去要能真正到它对应的那个地方。
+// 落点只有三种（都是已有能力）：tty → 聚焦终端窗口；Codex App → 深链接；Claude App → 激活 App。
+// 三样都没有的（Ralph 循环、launchd 起的 bug 监控这类无终端后台会话）点了不会有任何反应。
+//
+// ⚠️ 判据是「无 tty 且无 App 落点」，**不是** canJump=false：
+// canJump 还包含「有 tty 但认不出是哪个终端 App」那一档（冷门终端、ps 缓存抖动），
+// 那种情况会话是真实终端会话，按 canJump 过滤会把它误藏。tty 非空一律保留。
+//
+// tty 检测的准确性（2026-09-12 三组真机对照，fixtures/nested-session-facts.md §9）：
+// 有自己伪终端的会话拿到的是**它自己**的 ttys029（不是父会话的 ttys018）；
+// 完全无终端的会话稳定为 null；唯一的不准是「无终端但祖先有终端」会继承父的 tty——
+// 方向是**多给一个入口**（fail-open），不会误藏。
+
+test('无 tty 且无 App 落点（Ralph/launchd 形态）：不显示', () => {
+  const dir = tmp();
+  const snap = seed(dir, [
+    { agent: 'claude-code', sessionId: 'ralph', cwd: '/repo', tty: null, pid: 4242,
+      state: 'running', lastEvent: 'PreToolUse', ts: T0 - 5000 },
+    { agent: 'claude-code', sessionId: 'term', cwd: '/repo', tty: '/dev/ttys001', pid: 4243,
+      state: 'running', lastEvent: 'PreToolUse', ts: T0 - 5000 },
+  ]);
+  const r = agg.aggregate(snap, { now: T0, isPidAlive: () => true, t });
+  assert.deepStrictEqual(r.rows.map((x) => x.sessionId), ['term'], '点不进去的后台会话该隐藏');
+  assert.strictEqual(r.summary.hiddenNoTarget, 1, '要如实报出隐藏了几条，不能凭空消失');
+  assert.strictEqual(r.summary.running, 1, '被隐藏的行不计进汇总');
+});
+
+test('无 tty 但有 App 落点：Codex App 与 Claude App 都要留下', () => {
+  const dir = tmp();
+  const snap = seed(dir, [
+    { agent: 'codex', sessionId: 'codexapp', cwd: '', project: 'Codex App', tty: null, pid: null,
+      form: 'app', source: 'ipc', threadId: '01a08a1d-4f63-7e30-af03-48ae77b414b5',
+      state: 'running', lastEvent: 'ipc:activity', ts: T0 - 5000 },
+    { agent: 'claude-code', sessionId: 'ccapp', cwd: '/w', tty: null, pid: 9,
+      state: 'running', lastEvent: 'PreToolUse', ts: T0 - 5000 },
+    { agent: 'claude-code', sessionId: 'ralph', cwd: '/w', tty: null, pid: 10,
+      state: 'running', lastEvent: 'PreToolUse', ts: T0 - 5000 },
+  ]);
+  // 落点判定由调用方注入（tool 侧 = codex 深链接 || Claude App 归属），aggregate 零厂牌特判
+  const r = agg.aggregate(snap, {
+    now: T0, isPidAlive: () => true, t,
+    canJumpWithoutTty: (row) => row.sessionId === 'codexapp' || row.sessionId === 'ccapp'
+  });
+  assert.deepStrictEqual(r.rows.map((x) => x.sessionId).sort(), ['ccapp', 'codexapp']);
+  assert.strictEqual(r.summary.hiddenNoTarget, 1);
+});
+
+test('有 tty 但认不出终端 App：仍然显示（绝不按 canJump 过滤）', () => {
+  const dir = tmp();
+  const snap = seed(dir, [
+    { agent: 'claude-code', sessionId: 'weird-term', cwd: '/w', tty: '/dev/ttys077', pid: 7,
+      state: 'running', lastEvent: 'PreToolUse', ts: T0 - 5000 },
+  ]);
+  // canJump 恒 false = 终端归属判不出来（冷门终端 / ps 抖动）
+  const r = agg.aggregate(snap, { now: T0, isPidAlive: () => true, t, canJump: () => false });
+  assert.deepStrictEqual(r.rows.map((x) => x.sessionId), ['weird-term'],
+    '有 tty 就说明它在某个终端里，认不出 App 不等于点不进去');
+  assert.strictEqual(r.rows[0].canJump, false, '入口仍然不给（无假入口），但行要在');
+  assert.strictEqual(r.summary.hiddenNoTarget, 0);
+});
+
+test('读不出来的坏文件行照常保留（那是诊断信息，不是"点不进去的后台会话"）', () => {
+  const dir = tmp();
+  fs.writeFileSync(path.join(dir, 'broken.json'), '{ 这不是 JSON');
+  const r = agg.aggregate(sf.readSnapshots(dir), { now: T0, isPidAlive: () => true, t });
+  assert.strictEqual(r.rows.length, 1, '坏文件仍要有一行，否则用户看不出有会话读不了');
+  assert.strictEqual(r.rows[0].state, 'unknown');
+  assert.strictEqual(r.summary.hiddenNoTarget, 0);
 });

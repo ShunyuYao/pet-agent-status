@@ -25,6 +25,7 @@
   "jump.unavailable": "Can't find the terminal for this session",
   "panel.close": "Close",
   "panel.footer.hint": "Click a session to jump back · your pet pings you when it's done",
+  "panel.footer.hidden": "{n} background session(s) hidden — nowhere to jump to",
   "panel.summary.done": "{n} done",
   "panel.summary.running": "{n} running",
   "panel.summary.waiting": "{n} waiting",

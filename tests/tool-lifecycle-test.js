@@ -276,7 +276,10 @@ function leakedBackups() {
     }
     assert.strictEqual(data.rows[0].project, 'alpha');
     assert.strictEqual(data.rows[0].state, 'running');
-    assert.deepStrictEqual(data.summary, { running: 1, waiting: 0, done: 0, total: 1, unknown: 0, focus: { sessionId: 'a', state: 'running', project: 'alpha' } });
+    assert.deepStrictEqual(data.summary, {
+      running: 1, waiting: 0, done: 0, total: 1, unknown: 0, hiddenNoTarget: 0,
+      focus: { sessionId: 'a', state: 'running', project: 'alpha' }
+    });
   });
 
   await test('全链路：hook 落盘 done → 下一轮 tick 宠物提醒', async () => {
@@ -675,13 +678,16 @@ function leakedBackups() {
     const c = collectorOn(dir, {
       threadTitles: { lookup: (id) => { asked.push(id); return id === TID ? '查找 Codex 宠物多会话管理' : null; } },
       // 终端标签标题（facts：iTerm/Terminal 按 tty 查回），三行 tty 各有归属
-      terminalTitles: { lookup: (tty) => ({ '/dev/ttys017': '终端里的 AI 标题', '/dev/ttys022': '终端兜底名' }[tty] || null) }
+      terminalTitles: { lookup: (tty) => ({ '/dev/ttys017': '终端里的 AI 标题', '/dev/ttys022': '终端兜底名' }[tty] || null) },
+      // cc2 走 Claude App 归属（有落点但没有 App 标题）→ 行留下、标题回落落盘兜底
+      claudeDesktop: { lookupTitle: () => null, has: (id) => id === 'cc2' }
     });
     // codex 行：线程库命中 → 终端标签（ttys022 也有）必须让位
     sf.writeStatus(rec({ sessionId: TID, agent: 'codex', threadId: TID, tty: '/dev/ttys022', title: '兜底名', ts: T0 }), dir);
     // claude 行：磁盘上没有 AI 标题，终端标签就是用户看到的那个名字，压过落盘首条 prompt
     sf.writeStatus(rec({ sessionId: 'cc', agent: 'claude-code', tty: '/dev/ttys017', title: '首条 prompt 名', ts: T0 }), dir);
-    // claude 行无 tty：只能用落盘兜底
+    // claude 行无 tty：只能用落盘兜底。注意它必须是**有落点**的无 tty 行（这里是 Claude App
+    // 会话，归属成立 → 可激活 App），否则 2026-09-12「按落点过滤」会把整行隐藏。
     sf.writeStatus(rec({ sessionId: 'cc2', agent: 'claude-code', tty: null, title: '无终端兜底', ts: T0 }), dir);
     await c.start(m.pet);
     const rows = m.state.snapshots()[0].data.rows;
@@ -715,9 +721,10 @@ function leakedBackups() {
     await c.start(m.pet);
     const by = Object.fromEntries(m.state.snapshots()[0].data.rows.map((r) => [r.sessionId, r]));
     assert.strictEqual(by[APP].title, 'App 里的 AI 标题', 'App 元数据的 AI 标题必须压过落盘兜底');
-    assert.strictEqual(by[CLI].title, 'CLI 无终端', '归属不成立的行照旧走落盘兜底');
     assert.strictEqual(by[APP].canJump, true, 'App 会话 tty:null 也要有跳转入口（激活兜底）');
-    assert.strictEqual(by[CLI].canJump, false, '证明不了 App 归属的无 tty 行不给假入口');
+    // 归属证明不了的无 tty 行：2026-09-12「按落点过滤」起整行隐藏（原判据是"不给假入口"，
+    // 现在是更强的"根本不显示"——它既跳不到终端也跳不到 App）
+    assert.strictEqual(by[CLI], undefined, '一个落点都没有的无 tty 行应整行隐藏');
     const r = c.handleJump(m.pet, { sessionId: APP });
     assert.strictEqual(r.ok, true);
     assert.deepStrictEqual(calls, [['open', '-b', 'com.anthropic.claudefordesktop']],

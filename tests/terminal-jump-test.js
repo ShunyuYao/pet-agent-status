@@ -330,9 +330,12 @@ test('能推断出终端的行 canJump=true，推断不出的 canJump=false', ()
   assert.strictEqual(by['no-term'].canJump, false);
 });
 
-test('tty 为 null 的会话（管道里跑的）canJump=false', () => {
+test('tty 为 null 的会话（管道里跑的）不给入口——2026-09-12 起整行都不显示', () => {
+  // 原判据是 canJump=false（有行但不可点）。「按落点过滤」落地后，一个落点都没有的行
+  // 整行隐藏，是同一条保证的更强形式：canJump 就算被注入成恒 true 也不该冒出入口来。
   const snap = snapshotOf([rec({ sessionId: 'piped', tty: null })], { canJump: () => true });
-  assert.strictEqual(snap.rows[0].canJump, false);
+  assert.strictEqual(snap.rows.length, 0, '无 tty 无 App 落点的会话不该出现在面板上');
+  assert.strictEqual(snap.summary.hiddenNoTarget, 1, '隐藏了几条要如实报出来');
 });
 
 test('canJump 缺省为 false：拿不到判定就不给入口，不给假入口', () => {

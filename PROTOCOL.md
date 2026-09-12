@@ -205,6 +205,22 @@ IPC 仍是**可关闭的增强通道**（设置里可关，故障自动停用退
 隐藏发生在汇总之前：被顶掉的行不计进 `summary`（徽标/胶囊/宠物提醒同源，否则会为一条
 根本不显示的行喊「刚办完」）。
 
+## 按落点过滤：点不进去的会话不显示（2026-09-12）
+
+原则（用户拍板）：面板里的每一条，点下去都要能真正到它对应的地方。落点只有三种，
+都是已有能力：tty → 聚焦终端窗口；Codex/WorkBuddy → 深链接；Claude App → 激活 App。
+
+判据（`lib/aggregate.js`）：**`tty == null` 且 `canJumpWithoutTty(row)` 为假 → 整行隐藏**，
+计入 `summary.hiddenNoTarget`，面板底部如实说明条数。
+
+- **不得改用 `canJump === false` 当判据**：那一档包含「有 tty 但认不出终端 App」
+  （冷门终端、ps 缓存抖动），会话真实存在于某个终端里，按它过滤会误藏。tty 非空一律保留。
+- tty 检测的准确性与失准方向见 `fixtures/nested-session-facts.md` §9（三组真机对照）：
+  唯一失准是「无终端但祖先有终端时继承父 tty」，方向是多给入口，不会误藏。
+- 坏文件行不受影响（诊断信息）。
+- `summary` 是 panel/徽标/联动的共同契约，新增字段必须同步 `tests/aggregate-test.js`
+  与 `tests/tool-lifecycle-test.js` 里逐字段全等的那两条断言。
+
 ## 路径覆盖约定（测试隔离）
 
 | 环境变量 | 覆盖对象 | 默认 |
