@@ -223,6 +223,11 @@ function svgPathOf(file) {
   return svg.match(/<path[^>]*\bd="([^"]+)"/)[1];
 }
 
+function appIconDataUri(file) {
+  return 'data:image/png;base64,' +
+    fs.readFileSync(path.join(ROOT, 'assets', file)).toString('base64');
+}
+
 test('徽标资源存在且 panel 内联副本与之逐字一致', () => {
   const claude = svgPathOf('claude.svg');
   const openai = svgPathOf('openai.svg');
@@ -390,7 +395,7 @@ test('running 行显 mm:ss，done 行显相对时间', () => {
   p.close();
 });
 
-test('厂牌徽标：Claude 陶土底 / Codex 黑底，主图标用官方 path，角标区分 CLI 与 App', () => {
+test('厂牌徽标：Claude 陶土底 SVG / Codex 与 WorkBuddy 用真实彩色 App 图标，角标区分 CLI 与 App', () => {
   const snap = snapshotOf([
     rec({ sessionId: 'c', agent: 'claude-code', ts: T0 }),
     rec({ sessionId: 'x', agent: 'codex', ts: T0 - 1000 }),
@@ -402,9 +407,16 @@ test('厂牌徽标：Claude 陶土底 / Codex 黑底，主图标用官方 path�
   const badgeOf = (id) => p.$(`.row[data-session-id="${id}"] .badge`);
   assert.ok(badgeOf('c').classList.contains('is-claude'));
   assert.ok(badgeOf('x').classList.contains('is-codex'));
-  // 主图标是仓内官方 SVG 的 path，不是字母占位
+  // Claude 主图标是仓内官方 SVG 的 path，不是字母占位
   assert.strictEqual(badgeOf('c').querySelector('svg path').getAttribute('d'), svgPathOf('claude.svg'));
-  assert.strictEqual(badgeOf('x').querySelector('svg path').getAttribute('d'), svgPathOf('openai.svg'));
+  // Codex 2026-09-12 改用**真实蓝色 Codex App 图标**：黑白 OpenAI 星标是 ChatGPT 的厂牌标，
+  // 不是 Codex 这个产品的长相，用户按图标认产品会认错。
+  const cxImg = badgeOf('x').querySelector('img');
+  assert.ok(cxImg, 'Codex 徽标必须是 img（真实彩色图标），不再是单色 SVG');
+  assert.strictEqual(cxImg.getAttribute('src'), appIconDataUri('app-codex.png'),
+    'Codex 徽标必须用 assets/app-codex.png（与底栏启动器同一张图）');
+  assert.strictEqual(badgeOf('x').querySelector('svg'), null,
+    'Codex 不该再有单色 OpenAI SVG');
   // WorkBuddy：栅格产品图（内联 data URI），不是 SVG path 也不是字母占位
   assert.ok(badgeOf('w').classList.contains('is-workbuddy'));
   const wbImg = badgeOf('w').querySelector('img');
