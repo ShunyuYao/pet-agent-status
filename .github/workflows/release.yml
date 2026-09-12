@@ -18,9 +18,10 @@ jobs:
           for t in tests/*-test.js; do node "$t"; done
       - name: 打包运行时文件（只进插件本体，不进测试/文档/CI）
         run: |
-          mkdir -p out/pet-agent-status
-          cp -r manifest.json tool panel lib hooks assets locales README.md PROTOCOL.md LICENSE out/pet-agent-status/
-          cd out && zip -r -X plugin.zip pet-agent-status
+          mkdir -p out
+          git archive --format=zip --prefix=pet-agent-status/ --output=out/plugin.zip HEAD \
+            manifest.json tool panel lib hooks assets locales README.md PROTOCOL.md LICENSE
+          cd out
           shasum -a 256 plugin.zip | tee sha256.txt
       - name: 发布 Release 并附加产物
         env:
