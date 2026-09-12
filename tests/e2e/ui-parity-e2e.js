@@ -155,7 +155,7 @@ async function waitFor(fn, label, tries = 120) {
       return JSON.stringify({
         appText: app.textContent, cliText: cli.textContent,
         appBox: box(app), frame: box(fr), bar: box(bar),
-        radius: cs.borderTopLeftRadius, border: cs.borderTopColor, bg: cs.backgroundColor,
+        radius: cs.borderTopLeftRadius, ring: cs.boxShadow, bg: cs.backgroundColor,
         frameBorder: fs2.borderTopColor, barBg: bs.backgroundColor,
       });`));
     ok(!badge.missing, 'CLI 与 App 两种角标都渲染出来了');
@@ -164,7 +164,9 @@ async function waitFor(fn, label, tries = 120) {
     ok(Math.abs(badge.frame.w - 7) < 0.8 && Math.abs(badge.frame.h - 5.5) < 0.8,
       `窗口外框 ≈7×5.5（实测 ${badge.frame.w}×${badge.frame.h}）`, JSON.stringify(badge.frame));
     ok(Math.abs(badge.bar.h - 1.6) < 0.6, `标题栏高 ≈1.6（实测 ${badge.bar.h}）`, String(badge.bar.h));
-    ok(/rgb\(58,\s*63,\s*76\)/.test(badge.border), '角标描边是设计稿的 #3A3F4C', badge.border);
+    // 描边做在**外圈** box-shadow 而不是内边框：与自身同色的暗环压在 Codex 那张圆形渐变云上
+    // 会成一坨黑块（另一会话 2026-09-12 实测），合并时采纳了这个做法，颜色仍是设计稿的 #3A3F4C。
+    ok(/rgb\(58,\s*63,\s*76\)/.test(badge.ring), '角标描边（外圈）是设计稿的 #3A3F4C', badge.ring);
     ok(/rgb\(255,\s*255,\s*255\)/.test(badge.frameBorder) && /rgb\(255,\s*255,\s*255\)/.test(badge.barBg),
       '窗口图形是白色（旧实现是灰色）', `${badge.frameBorder} / ${badge.barBg}`);
     ok(Math.abs(parseFloat(badge.radius) - 4.5) < 0.3, '角标圆角 4.5', badge.radius);

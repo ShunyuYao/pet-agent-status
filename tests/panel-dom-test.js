@@ -225,7 +225,13 @@ test('DESIGN.md 尺寸：徽标 26 圆角 8 / 角标 13 / 项目名 13 / 副行 
   assert.ok(/padding:14px/.test(ruleOf('body')), '面板内边距不是 14');
   assert.ok(/gap:8px/.test(ruleOf('.list')), '行距不是 8');
   assert.ok(/font-size:16px/.test(ruleOf('.title')), '面板标题字号不是 16');
-  assert.ok(/font-size:10\.5px/.test(ruleOf('.footer')), '底部提示字号不是 10.5');
+  // 底栏 0.11.0 由提示文字改成 App 启动器，度量改钉这三条（设计稿 Figma 第 ⑤ 区 C1）
+  const appBtn = ruleOf('.app-btn');
+  assert.ok(/width:34px/.test(appBtn) && /height:34px/.test(appBtn), 'App 图标不是 34×34');
+  assert.ok(/border-radius:9px/.test(appBtn), 'App 图标圆角不是 9');
+  const appRow = ruleOf('.applauncher-row');
+  assert.ok(/justify-content:center/.test(appRow), 'App 图标必须水平居中');
+  assert.ok(/gap:14px/.test(appRow), 'App 图标间距不是 14');
   assert.ok(/font-size:12\.5px/.test(ruleOf('.install-btn')), '主按钮字号不是 12.5');
   assert.ok(/border-radius:10px/.test(ruleOf('.install-btn')), '主按钮圆角不是 10');
 });
@@ -324,6 +330,11 @@ function svgPathOf(file) {
   assert.strictEqual(paths.length, 1, `${file} 应为单 path（Simple Icons 原形）`);
   assert.ok(!/https?:\/\/(?!www\.w3\.org)/.test(svg), `${file} 不得引用远程资源`);
   return svg.match(/<path[^>]*\bd="([^"]+)"/)[1];
+}
+
+function appIconDataUri(file) {
+  return 'data:image/png;base64,' +
+    fs.readFileSync(path.join(ROOT, 'assets', file)).toString('base64');
 }
 
 test('徽标资源存在且 panel 内联副本与之逐字一致', () => {
@@ -493,7 +504,7 @@ test('running 行显 mm:ss，done 行显相对时间', () => {
   p.close();
 });
 
-test('厂牌徽标：Claude 陶土底 / Codex 黑底，主图标用官方 path，角标区分 CLI 与 App', () => {
+test('厂牌徽标：Claude 陶土底 SVG / Codex 与 WorkBuddy 用真实彩色 App 图标，角标区分 CLI 与 App', () => {
   const snap = snapshotOf([
     rec({ sessionId: 'c', agent: 'claude-code', ts: T0 }),
     rec({ sessionId: 'x', agent: 'codex', ts: T0 - 1000 }),
@@ -508,9 +519,16 @@ test('厂牌徽标：Claude 陶土底 / Codex 黑底，主图标用官方 path�
   const badgeOf = (id) => p.$(`.row[data-session-id="${id}"] .badge`);
   assert.ok(badgeOf('c').classList.contains('is-claude'));
   assert.ok(badgeOf('x').classList.contains('is-codex'));
-  // 主图标是仓内官方 SVG 的 path，不是字母占位
+  // Claude 主图标是仓内官方 SVG 的 path，不是字母占位
   assert.strictEqual(badgeOf('c').querySelector('svg path').getAttribute('d'), svgPathOf('claude.svg'));
-  assert.strictEqual(badgeOf('x').querySelector('svg path').getAttribute('d'), svgPathOf('openai.svg'));
+  // Codex 2026-09-12 改用**真实蓝色 Codex App 图标**：黑白 OpenAI 星标是 ChatGPT 的厂牌标，
+  // 不是 Codex 这个产品的长相，用户按图标认产品会认错。
+  const cxImg = badgeOf('x').querySelector('img');
+  assert.ok(cxImg, 'Codex 徽标必须是 img（真实彩色图标），不再是单色 SVG');
+  assert.strictEqual(cxImg.getAttribute('src'), appIconDataUri('app-codex.png'),
+    'Codex 徽标必须用 assets/app-codex.png（与底栏启动器同一张图）');
+  assert.strictEqual(badgeOf('x').querySelector('svg'), null,
+    'Codex 不该再有单色 OpenAI SVG');
   // WorkBuddy：栅格产品图（内联 data URI），不是 SVG path 也不是字母占位
   const WB = '2f5c1e90-0b7a-4f3d-9a11-7c6d5e4b3a21';
   assert.ok(badgeOf(WB).classList.contains('is-workbuddy'));
@@ -749,10 +767,11 @@ test('tool 真的把 locale 随快照发出来（不是 panel 自说自话）', 
   assert.ok(Array.isArray(snap.rows) && snap.summary);
 });
 
-test('底部提示与面板标题取自词表', () => {
+test('面板标题取自词表', () => {
   const p = mountPanel();
   assert.strictEqual(p.$('#title').textContent, t('panel.title'));
-  assert.strictEqual(p.$('#footer').textContent, t('panel.footer.hint'));
+  // 原「底部提示」断言随 0.11.0 底栏改版删除：那行字已被 App 启动器取代
+  // （docs/design-launcher-proposal.md）。启动器自己的断言见下方「底栏 App 启动器」节。
   p.close();
 });
 
@@ -1056,9 +1075,11 @@ test('titleFor 注入链贯通：解析出的线程标题渲染进行主标签',
 });
 
 // ---- 按落点过滤：隐藏了几条要如实说出来（2026-09-12）----
-// 会话凭空消失比多显示一行更糟——用户会以为插件坏了。底部提示要明说藏了几条、为什么。
+// 会话凭空消失比多显示一行更糟——用户会以为插件坏了。
+// 0.12.0 起底栏换成了 App 启动器（设计有意为之，见 docs/design-launcher-proposal.md），
+// 这条说明改挂在列表下方的独立一行 #hidden-note：只有真藏了东西时才出现。
 
-test('有被隐藏的后台会话时，底部提示如实说明条数', () => {
+test('有被隐藏的后台会话时，列表下方如实说明条数', () => {
   const p = mountPanel();
   const snap = snapshotOf([
     rec({ sessionId: 'term', tty: '/dev/ttys001', ts: T0 }),
@@ -1067,26 +1088,176 @@ test('有被隐藏的后台会话时，底部提示如实说明条数', () => {
   ]);
   assert.strictEqual(snap.summary.hiddenNoTarget, 2, '前置：应当隐藏两条');
   p.push('agent-status:snapshot', snap);
-  const footer = p.$('#footer').textContent;
-  assert.ok(/2/.test(footer), `底部提示要说出条数，实际: ${footer}`);
-  assert.ok(/后台|隐藏|跳/.test(footer), `要说清为什么被隐藏，实际: ${footer}`);
+  const note = p.$('#hidden-note');
+  assert.ok(note && !note.hidden, '藏了东西就该有说明行');
+  assert.ok(/2/.test(note.textContent), `要说出条数，实际: ${note.textContent}`);
+  assert.ok(/后台|隐藏|跳/.test(note.textContent), `要说清为什么，实际: ${note.textContent}`);
   p.close();
 });
 
-test('没有被隐藏的会话时，底部提示保持原样（不平白多一句话）', () => {
+test('没有被隐藏的会话时不出现说明行（不平白多一句话）', () => {
   const p = mountPanel();
   p.push('agent-status:snapshot', snapshotOf([rec({ sessionId: 'term', tty: '/dev/ttys001', ts: T0 })]));
-  assert.strictEqual(p.$('#footer').textContent, '点击会话跳回终端 · 完成时宠物会提醒你');
+  assert.strictEqual(p.$('#hidden-note').hidden, true);
   p.close();
 });
 
-test('英文环境下隐藏提示也走词表', () => {
+test('英文环境下隐藏说明也走词表', () => {
   const p = mountPanel({ language: 'en' });
   p.push('agent-status:snapshot', snapshotOf([
     rec({ sessionId: 'term', tty: '/dev/ttys001', ts: T0 }),
     rec({ sessionId: 'bg1', tty: null, ts: T0 }),
   ]));
-  const footer = p.$('#footer').textContent;
-  assert.ok(/1/.test(footer) && /[A-Za-z]/.test(footer) && !/后台/.test(footer), `实际: ${footer}`);
+  const txt = p.$('#hidden-note').textContent;
+  assert.ok(/1/.test(txt) && /[A-Za-z]/.test(txt) && !/后台/.test(txt), `实际: ${txt}`);
   p.close();
+});
+
+// ---- 底栏 App 启动器（0.11.0，docs/design-launcher-proposal.md）----
+// 输入一律是 tool 侧真实事件载荷经 pet.events 送进来，不直调面板内部函数。
+
+test('启动器：装了的 App 渲染成可点图标，顺序即载荷顺序', () => {
+  const p = mountPanel();
+  p.push(tool.APPS_EVENT, { apps: [
+    { id: 'claude', bundleId: 'com.anthropic.claudefordesktop', name: 'Claude', running: false },
+    { id: 'codex', bundleId: 'com.openai.codex', name: 'Codex', running: false },
+    { id: 'workbuddy', bundleId: 'com.workbuddy.workbuddy', name: 'WorkBuddy', running: false }
+  ] });
+  assert.strictEqual(p.$('#applauncher').hidden, false, '有 App 时底栏要显示');
+  const btns = p.$$('.app-btn');
+  assert.deepStrictEqual(btns.map((b) => b.dataset.appId), ['claude', 'codex', 'workbuddy']);
+  assert.ok(btns.every((b) => b.tagName === 'BUTTON'), '必须是真按钮（键盘可达）');
+  // 素材断言要问「是哪张图」而不是「有没有图」（AGENTS.md 设计红线 2026-09-12 教训）：
+  // 底栏必须是**真实彩色 App 图标**（PNG data URI），不是会话行那套单色厂牌 SVG。
+  for (const b of btns) {
+    const img = b.querySelector('img');
+    assert.ok(img, `${b.dataset.appId} 应当用 <img> 渲染真实 App 图标`);
+    assert.ok(/^data:image\/png;base64,/.test(img.getAttribute('src')),
+      `${b.dataset.appId} 图标必须是内联 PNG data URI（真 App 图标），实际: ${String(img.getAttribute('src')).slice(0, 30)}`);
+    assert.strictEqual(b.querySelector('svg'), null,
+      `${b.dataset.appId} 不该用单色厂牌 SVG —— 那是会话行徽标的画法，不是设计稿里的底栏图标`);
+  }
+  p.close();
+});
+
+test('启动器：三个 App 的图标各不相同（不是同一张图顶替）', () => {
+  const p = mountPanel();
+  p.push(tool.APPS_EVENT, { apps: [
+    { id: 'claude', name: 'Claude', running: false },
+    { id: 'codex', name: 'Codex', running: false },
+    { id: 'workbuddy', name: 'WorkBuddy', running: false }
+  ] });
+  const srcs = p.$$('.app-btn img').map((i) => i.getAttribute('src'));
+  assert.strictEqual(new Set(srcs).size, 3, '三个图标必须是三张不同的图');
+  assert.ok(srcs.every((s) => s.length > 500), '图标 data URI 不该是空壳/占位');
+  p.close();
+});
+
+test('启动器：一个都没装 → 整条底栏 hidden（连分隔线，不留占位文案）', () => {
+  const p = mountPanel();
+  p.push(tool.APPS_EVENT, { apps: [] });
+  assert.strictEqual(p.$('#applauncher').hidden, true);
+  assert.strictEqual(p.$$('.app-btn').length, 0);
+  // 反向守「别偷偷加一句占位文案」：底栏容器里不该出现任何可见文字
+  assert.strictEqual(p.$('#applauncher').textContent.trim(), '');
+  p.close();
+});
+
+test('启动器：没装的那个不出现（不是灰按钮）', () => {
+  const p = mountPanel();
+  p.push(tool.APPS_EVENT, { apps: [
+    { id: 'claude', name: 'Claude', running: false },
+    { id: 'workbuddy', name: 'WorkBuddy', running: false }
+  ] });
+  assert.deepStrictEqual(p.$$('.app-btn').map((b) => b.dataset.appId), ['claude', 'workbuddy']);
+  assert.strictEqual(p.$('.app-btn.is-codex'), null, 'Codex 没装就不该有节点');
+  p.close();
+});
+
+test('启动器：running 的那个带绿点，其余没有', () => {
+  const p = mountPanel();
+  p.push(tool.APPS_EVENT, { apps: [
+    { id: 'claude', name: 'Claude', running: true },
+    { id: 'codex', name: 'Codex', running: false }
+  ] });
+  assert.ok(p.$('.app-btn.is-claude .app-run-dot'), 'running 的要有绿点');
+  assert.strictEqual(p.$('.app-btn.is-codex .app-run-dot'), null, '没跑的不该有绿点');
+  p.close();
+});
+
+test('启动器：点击发 open-app 意图，只带 appId（不带 bundleId）', () => {
+  const p = mountPanel();
+  p.push(tool.APPS_EVENT, { apps: [
+    { id: 'claude', bundleId: 'com.anthropic.claudefordesktop', name: 'Claude', running: false }
+  ] });
+  p.$('.app-btn.is-claude').dispatchEvent(new p.dom.window.MouseEvent('click', { bubbles: true }));
+  const ev = p.emitted.filter((e) => e.name === tool.OPEN_APP_EVENT);
+  assert.strictEqual(ev.length, 1, '应发一条打开意图');
+  // 载荷是 jsdom realm 里造的对象，原型与本 realm 不同 → deepStrictEqual 恒假
+  // （已实测确认是跨 realm 原型差异，不是产品缺陷）。逐字段断言，且这样更能钉住
+  // 真正在意的那条：**除 appId 外不许多带任何键**，尤其不许带 bundleId。
+  assert.strictEqual(ev[0].data.appId, 'claude');
+  assert.deepStrictEqual(Object.keys(ev[0].data), ['appId'],
+    '只带 appId —— bundleId 由 tool 侧从登记表取，渲染进程说了不算');
+  p.close();
+});
+
+test('启动器：重复推送不叠加节点（每次重画）', () => {
+  const p = mountPanel();
+  const payload = { apps: [{ id: 'claude', name: 'Claude', running: false }] };
+  p.push(tool.APPS_EVENT, payload);
+  p.push(tool.APPS_EVENT, payload);
+  p.push(tool.APPS_EVENT, payload);
+  assert.strictEqual(p.$$('.app-btn').length, 1);
+  p.close();
+});
+
+test('启动器：从有到无会收起底栏（App 被卸载的路径）', () => {
+  const p = mountPanel();
+  p.push(tool.APPS_EVENT, { apps: [{ id: 'claude', name: 'Claude', running: false }] });
+  assert.strictEqual(p.$('#applauncher').hidden, false);
+  p.push(tool.APPS_EVENT, { apps: [] });
+  assert.strictEqual(p.$('#applauncher').hidden, true, '装的 App 没了要收起，不能留空带');
+  p.close();
+});
+
+test('启动器：坏载荷（缺 apps / 非数组）不炸，按空处理', () => {
+  const p = mountPanel();
+  for (const bad of [undefined, {}, { apps: null }, { apps: 'nope' }]) {
+    assert.doesNotThrow(() => p.push(tool.APPS_EVENT, bad), '坏载荷不许把面板打死');
+    assert.strictEqual(p.$('#applauncher').hidden, true);
+  }
+  p.close();
+});
+
+test('App 启动器图标：panel 内联 data URI 与 assets/app-*.png 逐字节一致', () => {
+  // 同「内联副本 vs 仓内资源」纪律：两份副本没守卫早晚各说各话。
+  for (const [appId, file] of [
+    ['claude', 'app-claude.png'],
+    ['codex', 'app-codex.png'],
+    ['workbuddy', 'app-workbuddy.png']
+  ]) {
+    const expected = 'data:image/png;base64,' +
+      fs.readFileSync(path.join(ROOT, 'assets', file)).toString('base64');
+    assert.ok(html.includes(expected),
+      `panel 内联的 ${appId} 图标与 assets/${file} 不一致（改了图要同步内联副本）`);
+  }
+});
+
+test('App 图标分辨率足够 Retina（≥78px：行徽标 26pt @3x）', () => {
+  // 2026-09-12 教训：首版做成 42px —— 那是照「底栏 21pt @2x」算的，
+  // 但同一张图还要给**行徽标 26pt** 用，@2x 就要 52px、@3x 要 78px，
+  // 于是在行徽标上被放大 1.24 倍，肉眼可见发糊。
+  // Codex 更惨：42px 那张还裁掉了 28% 白边，有效分辨率只剩约 30px。
+  // 逐字节守卫（内联副本 vs assets/）对「两边一样糊」恒真，测不出这个问题，故单列一条。
+  const MIN = 78;
+  for (const file of ['app-claude.png', 'app-codex.png', 'app-workbuddy.png']) {
+    const buf = fs.readFileSync(path.join(ROOT, 'assets', file));
+    // PNG IHDR：宽高是第 16–23 字节的两个大端 uint32
+    assert.strictEqual(buf.slice(1, 4).toString('ascii'), 'PNG', `${file} 不是 PNG`);
+    const w = buf.readUInt32BE(16);
+    const h = buf.readUInt32BE(20);
+    assert.ok(w >= MIN && h >= MIN,
+      `${file} 分辨率 ${w}×${h} 不足 ${MIN}px —— 行徽标 26pt @3x 会被放大发糊`);
+  }
 });

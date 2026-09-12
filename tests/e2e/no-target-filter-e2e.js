@@ -131,9 +131,12 @@ async function waitFor(fn, label, tries = 120) {
       return JSON.stringify({ cursor: el ? getComputedStyle(el).cursor : null, txt: el ? el.textContent : '' });`));
     ok(/pointer/.test(String(appRow.cursor)), 'App 会话仍是可点态', String(appRow.cursor));
 
-    const footer = await evalIn(panel, "return document.getElementById('footer').textContent;");
-    ok(/1/.test(String(footer)) && /后台|hidden/i.test(String(footer)),
-      '底部如实说明隐藏了 1 条（不让会话凭空消失）', String(footer));
+    // 0.12.0 起底栏换成了 App 启动器，说明改挂列表下方的 #hidden-note（只在真藏了东西时出现）
+    const note = JSON.parse(await evalIn(panel, `
+      const el = document.getElementById('hidden-note');
+      return JSON.stringify({ hidden: el ? el.hidden : null, txt: el ? el.textContent : null });`));
+    ok(note.hidden === false && /1/.test(String(note.txt)) && /后台|hidden/i.test(String(note.txt)),
+      '如实说明隐藏了 1 条（不让会话凭空消失）', JSON.stringify(note));
 
     ok(!/TypeError|Uncaught|Unhandled/.test(log), '宿主日志无未处理异常', String(log).slice(-300));
   } catch (e) {

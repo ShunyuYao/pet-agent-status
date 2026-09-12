@@ -55,13 +55,27 @@ async function waitFor(check, label, tries = 60) {
   throw new Error(`等待超时：${label}`);
 }
 
-// 状态记录：pid 用本测试进程（活着，deriveState 不会误推 error）；tty 不给（避免
-// 真机终端归属探测的不确定性——跳转入口与本缺陷无关）。
+// 状态记录：pid 用本测试进程（活着，deriveState 不会误推 error）。
+//
+// ⚠️ tty 必须给（0.11.0「按落点过滤」起）：无 tty 又不属于任何 App 的会话点不进去，
+// 整行不再显示，徽标会因此变成「常驻空段」——原注释说"tty 不给以避开终端归属探测的
+// 不确定性"，那个理由在过滤落地后不再成立：不给 tty 会直接改变本用例的结果。
+// 给一个形态合法但不存在的 tty 即可：行会显示（有 tty 就保留），
+// 终端归属判不出来只影响可点态，与本用例要验的徽标分段无关。
 function rec(over) {
-  return Object.assign({
+  const out = Object.assign({
     agent: 'claude-code', cwd: path.join(os.homedir(), 'projects', 'demo'),
     pid: process.pid, lastEvent: 'UserPromptSubmit', ts: Date.now()
   }, over);
+  // 每个会话各占一个终端窗口：同一个 tty 上的已结束会话会被 0.10.3 的同窗顶替收走
+  // （实测：四条共用一个 tty 时 2 运行+2 完成 被压成 1+1）。
+  if (!('tty' in (over || {}))) {
+    const id = String((over && over.sessionId) || 's');
+    let h = 0;
+    for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) % 900;
+    out.tty = `/dev/ttys${h + 100}`;
+  }
+  return out;
 }
 
 /** 浮层里的徽标段（tone/text）——与宿主 pet-badge E2E 同一判据。null=无徽标。 */
@@ -122,7 +136,15 @@ async function waitPill(panelPage, expected, label) {
 
     electron = H.launch({
       userData: USERDATA, cdpPort: CDP,
-      env: { PET_E2E_TEST: '1', PET_AGENT_STATUS_DIR: STATE_DIR }
+      env: {
+        PET_E2E_TEST: '1', PET_AGENT_STATUS_DIR: STATE_DIR,
+        // 隔离 Codex / WorkBuddy 两个数据源：不指临时目录的话，插件会去摸**真实**的
+        // ~/.codex 与 ~/.workbuddy，把维护者机器上正在跑的真会话摄入到本用例的状态目录里
+        // ——实测多出一条 running，四条夹具被数成五条（2026-09-12 发版门禁抓到）。
+        CODEX_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'pet-as-dual-codex-')),
+        PET_AS_WORKBUDDY_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'pet-as-dual-wb-')),
+        PET_AS_CLAUDE_APP_SUPPORT: fs.mkdtempSync(path.join(os.tmpdir(), 'pet-as-dual-ccd-'))
+      }
     });
     const petPage = await H.findTarget(CDP, '/index.html');
     await waitFor(() => H.evalIn(petPage, 'Boolean(window.petAPI && window.applyPluginPet)'), '内核就绪');
@@ -164,9 +186,11 @@ async function waitPill(panelPage, expected, label) {
     await waitBadge(overlayPage, [{ tone: 'success', text: '2' }], '徽标 = [已完成 2]');
     await waitPill(panelPage, [{ state: 'done', text: '2 已完成' }], '胶囊 = 「2 已完成」');
 
-    console.log('\n── 5. 全清 → 徽标撤除、胶囊隐藏（无会话不留空徽标）');
+    console.log('\n── 5. 全清 → 徽标转常驻空段、胶囊隐藏');
     for (const id of ['e2e-d1', 'e2e-d2']) sf.removeStatus(id, STATE_DIR);
-    await waitBadge(overlayPage, null, '无会话 → 徽标清除');
+    // 0.12.0「徽标常驻」起：无会话不再 clear 整个徽标，而是留 1 段 muted + 空文本——
+    // 否则宠物脚下唯一的会话入口会消失（该改动的理由见 commit 07fed2c）。
+    await waitBadge(overlayPage, [{ tone: 'muted', text: '' }], '无会话 → 徽标转常驻空段');
     await waitPill(panelPage, null, '无会话 → 胶囊隐藏');
 
     console.log(`\n结果：${passed} 通过 / ${failed} 失败`);

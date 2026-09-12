@@ -147,15 +147,17 @@ async function waitFor(fn, label, tries = 120) {
     // ---- 2. tty:null 的 App 行是可点态（激活 Claude App 兜底入口）----
     ok(/pointer/.test(appRow.cursor), 'App 行可点（tty:null 也有跳转入口）', appRow.cursor);
 
-    // ---- 3. 对照：证明不了归属的无 tty 行不可点（无假入口），且显落盘兜底名 ----
-    const cliRow = await waitFor(async () => {
-      const r = await evalIn(panel, `
-        const el = document.querySelector('.row[data-session-id="${cliSid}"]');
-        return el ? JSON.stringify({ txt: el.textContent, cursor: getComputedStyle(el).cursor }) : null;`);
-      return r ? JSON.parse(r) : null;
-    }, '对照行出现在面板上');
-    ok(cliRow.txt.includes('CLI 无终端兜底名'), '对照行照旧显示落盘兜底名', cliRow.txt.slice(0, 80));
-    ok(!/pointer/.test(cliRow.cursor), '对照行不可点（证明不了 App 归属就不给假入口）', cliRow.cursor);
+    // ---- 3. 对照：证明不了归属的无 tty 行整行不显示 ----
+    // 0.11.0「按落点过滤」起，这种既跳不到终端也跳不到 App 的行不再渲染（原判据是
+    // 「渲染但不可点」，现在是更强的「根本不出现」）。等两轮 tick 确保不是还没画。
+    await sleep(2500);
+    const cliShown = await evalIn(panel, `
+      return document.querySelectorAll('.row[data-session-id="${cliSid}"]').length;`);
+    ok(cliShown === 0, '证明不了 App 归属的无 tty 行整行隐藏（无处可跳）', String(cliShown));
+    const note = await evalIn(panel, `
+      const el = document.getElementById('hidden-note');
+      return el ? el.textContent : null;`);
+    ok(/1/.test(String(note)), '并如实说明隐藏了 1 条', String(note));
 
     ok(!/TypeError|Uncaught|Unhandled/.test(log), '宿主日志无未处理异常', String(log).slice(-400));
   } catch (e) {
