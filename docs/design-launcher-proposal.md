@@ -23,6 +23,7 @@ Figma：`UJimpWGl2hGkrbzxIVCAK5` 第 ⑤ 区（y≈1920 起）
 - 未运行 → 拉起；已运行 → 切前台。两者都是 `open -b <bundleId>`（macOS 天然 activate 语义）
 - **图标水平居中**（autolayout `primaryAxisAlignItems:'CENTER'`），图标数量变化自动保持居中
 - 没装 → **整个图标不出现**，不做灰态（点不动的入口＝死链）
+- **一个都没装 → 底栏整条不出现**（连分隔线一起），见下节
 - 右上绿点 = 该 App 有会话在跑，数据取现成 snapshot 的 `agent` 字段，**零新增采集**
 
 ### 本机实测的 bundle id
@@ -35,6 +36,25 @@ Figma：`UJimpWGl2hGkrbzxIVCAK5` 第 ⑤ 区（y≈1920 起）
 
 ⚠️ Codex 没有独立的 `Codex.app`——`mdfind com.openai.codex` 解析到 `/Applications/ChatGPT.app`，
 `lsregister` 里 `codex:` scheme 也确由它注册。检测必须按 **bundleId**，不能按 `/Applications/Codex.app` 路径。
+
+### 一个 App 都没装（C3 有会话 / C4 空态）
+
+**底栏整条不渲染**：没有分隔线、没有图标、也**没有「未检测到 App」占位文案**。
+列表区因此多出 62px，正好多显示一行会话。
+
+不显示占位文案的理由：
+- 「未检测到支持的 App」对用户是**零行动价值**的一行字——他不会因为看到它就去装
+  Claude/Codex，反而占掉一行会话位。
+- 与既有取向一致：没装的图标直接不显示而非给灰按钮。零个装只是同一条规则的极端值。
+
+**这不是边缘情况**：纯 CLI 用户就是这一档——本机有 `claude`/`codex` 命令行，
+但 `/Applications` 下一个 .app 都没有。插件对他完全可用（会话照常显示、点击照常跳回终端），
+只是启动器无从可启。实测本机 `claude` 在 `~/.local/bin`、`codex` 在 `/opt/homebrew/bin`，
+与三个 .app 是两回事。
+
+实现判据：`detectedApps.length === 0` → 不渲染整个 footer。
+⚠️ 是「检测到的 App 数」，**不是「hooks 有没有接入」**——后者是另一回事，
+面板设置视图里已有独立的已接入/未接入展示，别混。
 
 ### 底栏度量（定稿）
 
