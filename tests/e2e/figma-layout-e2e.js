@@ -116,9 +116,9 @@ async function run() {
       const b=m.buttons[i],name='launcher '+b.id;
       check(name+' button width',b.box.w,40,0.02);check(name+' button height',b.box.h,40,0.02);
       check(name+' x',b.box.x,86+i*54,0.02);check(name+' button y',b.box.y,366,0.02);
-      check(name+' clip width',b.clip.w,32,0.02);check(name+' clip height',b.clip.h,32,0.02);
-      check(name+' clip inset',b.clip.x-b.box.x,4,0.02);check(name+' clip y',b.clip.y,370,0.02);
-      check(name+' image leaf width',b.img.w,40,0.02);check(name+' crop offset',b.img.x-b.clip.x,-4,0.02);
+      check(name+' clip width',b.clip.w,28,0.02);check(name+' clip height',b.clip.h,28,0.02);
+      check(name+' clip inset',b.clip.x-b.box.x,6,0.02);check(name+' clip y',b.clip.y,372,0.02);
+      check(name+' image leaf width',b.img.w,35,0.02);check(name+' image leaf height',b.img.h,35,0.02);check(name+' crop offset',b.img.x-b.clip.x,-3.5,0.02);
       check(name+' no resting gray plate',b.bg,'rgba(0, 0, 0, 0)');check(name+' decoded',b.loaded,true);
       const data=Buffer.from(b.src.split(',')[1],'base64');
       const expected=fs.readFileSync(path.join(__dirname,'../../assets',`app-${b.id}.png`));

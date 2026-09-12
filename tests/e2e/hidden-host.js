@@ -79,7 +79,7 @@ async function start(options = {}) {
   for (const folder of ['panel', 'lib', 'tool', 'assets']) hashTree(path.join(paths.stage, folder), folder);
   writeJson(path.join(artifacts, 'staged-source-sha256.json'), sourceHash);
   const errors = [], connections = new Map();
-  let app, stopping = false, cdpPort;
+  let app, stopping = false, cdpPort, panelReadyLogOffset = 0;
   const harness = { paths, errors, waitFor, panel: null, settings: null, pet: null };
   const rendererEvent = (target, message) => {
     if (message.method === 'Runtime.exceptionThrown' || (message.method === 'Runtime.consoleAPICalled' && message.params.type === 'error') || (message.method === 'Log.entryAdded' && message.params.entry.level === 'error')) {
@@ -91,6 +91,20 @@ async function start(options = {}) {
   async function connect(target) {
     if (!target) throw new Error('Missing CDP target');
     if (connections.has(target.id)) return connections.get(target.id);
+    if (decodeURIComponent(target.url).includes(manifest.id + '/panel/panel.html')) {
+      // Each new panel has its own sandbox preload. Attaching Runtime while it
+      // initializes can produce binding.startupData=null (recorded in 0.12.2).
+      // Consume the next production panel-ready event from this launch's host log
+      // before attaching; no sleeps, synthetic state, or suppressed console errors.
+      const marker = '[plugins] 事件 agent-status:panel-ready ← ' + manifest.id;
+      await waitFor(() => {
+        const log = fs.readFileSync(paths.log, 'utf8');
+        const index = log.indexOf(marker, panelReadyLogOffset);
+        if (index < 0) return false;
+        panelReadyLogOffset = index + marker.length;
+        return true;
+      }, 'new panel production ready signal');
+    }
     const socket = new WebSocket(target.webSocketDebuggerUrl);
     await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
     let sequence = 0;
@@ -169,6 +183,7 @@ async function start(options = {}) {
   async function launch() {
     stopping = false;
     const logOffset = fs.statSync(paths.log).size;
+    panelReadyLogOffset = fs.readFileSync(paths.log, 'utf8').length;
     cdpPort = await freePort(); harness.port = cdpPort;
     const executable = path.join(hostDir, 'demo', 'node_modules', '.bin', 'electron');
     const env = { ...process.env, PET_E2E_TEST: '1', PET_E2E_BACKGROUND: '1', PET_E2E_HIDDEN: '1', PET_USERDATA_DIR: paths.userData, PET_AGENT_STATUS_DIR: paths.state, PET_AS_E2E_FIXTURE: paths.fixture, PET_AS_WORKBUDDY_HOME: paths.workbuddy, PET_AS_CLAUDE_APP_SUPPORT: paths.claudeApp, PET_AS_CLAUDE_SETTINGS: paths.claudeSettings, PET_AS_CODEX_HOOKS: paths.codexHooks };
