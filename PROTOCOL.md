@@ -232,3 +232,4 @@ IPC 仍是**可关闭的增强通道**（设置里可关，故障自动停用退
 | `PET_AS_WORKBUDDY_HOME` | WorkBuddy 数据目录（DB 与 serve 心跳文件同源认它） | `~/.workbuddy` |
 | `PET_AS_CLAUDE_APP_SUPPORT` | Claude Desktop App 数据目录（会话元数据：AI 标题与归属） | `~/Library/Application Support/Claude` |
 | `PET_AS_PS_OUTPUT` | 进程表（子进程会话判定用，测试注入实录 ps 输出） | 实跑 `ps -eo pid=,ppid=,tty=,comm=` |
+| `PET_AS_TTY` | 会话 tty（测试钉死；tty 检测依赖环境，CI 上完全没有 tty） | 由 fd/ps 反查 |

@@ -61,11 +61,19 @@ function tmp() {
 }
 
 // ---- 真实动作等价物：spawn hook，把 payload 从 stdin 灌进去 ----
+//
+// tty 钉死（PET_AS_TTY）：hook 的 tty 是**从运行环境推出来的**——开发机上跑在终端里能推到
+// ttysNNN，CI 上完全没有 tty 只能是 null。0.11.0「按落点过滤」之后这个差异直接决定行显不显示，
+// 于是同一份用例在本机绿、在 CI 红（2026-09-12 发版时 CI 实际拦下）。本套件测的是
+// 「codex 事件 → 落盘 → 采集 → 渲染」这条链，tty 只是让行有个落点的前提，钉死它才有确定性。
+// 要验 tty 检测本身的用例在 tests/claude-hook-test.js，那里不钉。
+const PINNED_TTY = '/dev/ttys001';
 function runHook(payload, dir, extraEnv) {
   return spawnSync(process.execPath, [HOOK], {
     input: typeof payload === 'string' ? payload : JSON.stringify(payload),
     encoding: 'utf8',
-    env: Object.assign({}, process.env, { PET_AGENT_STATUS_DIR: dir }, extraEnv || {})
+    env: Object.assign({}, process.env,
+      { PET_AGENT_STATUS_DIR: dir, PET_AS_TTY: PINNED_TTY }, extraEnv || {})
   });
 }
 
