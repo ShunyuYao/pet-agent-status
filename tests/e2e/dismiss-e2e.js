@@ -24,6 +24,7 @@ const waitFor = (fn, label, tries = 120) => currentHost.waitFor(fn, label, tries
     const stateDir = host.paths.state;
     const info = (await host.evaluate('window.settings.pluginsList()', settings)).find((plugin) => plugin.id === 'pet-agent-status');
     ok(info?.status === 'active', '插件旁加载安装成功且已激活');
+    ok(info?.updateReminders === true, '真实宿主识别插件已开启更新提醒');
     ok(info.version === require(path.join(PLUGIN_DIR, 'manifest.json')).version, '装上的是当前插件版本');
     // ---- 2. 喂一条真实状态文件（用户/系统真实动作的等价物）----
     const sid = `pet-as-test-e2e-${Date.now()}`;

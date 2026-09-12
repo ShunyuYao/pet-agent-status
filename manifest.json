@@ -4,6 +4,7 @@
   "version": "0.12.2",
   "apiVersion": 1,
   "activation": "opt-in",
+  "updateReminders": true,
   "kind": [
     "tool",
     "panel"

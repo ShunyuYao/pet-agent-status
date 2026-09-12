@@ -244,6 +244,7 @@ test('manifest.json 符合宿主 loadManifest 的校验规则', () => {
   assert.ok(/^\d+\.\d+\.\d+/.test(m.version), 'version 必须是 x.y.z');
   assert.ok(Number.isInteger(m.apiVersion) && m.apiVersion >= 1);
   assert.strictEqual(m.activation, 'opt-in', 'activation 只支持 opt-in');
+  assert.strictEqual(m.updateReminders, true, '参与宿主提醒，仍须用户确认安装');
 
   const KINDS = ['tool', 'panel', 'asset', 'skill', 'settings', 'service', 'dashboard-card'];
   assert.ok(Array.isArray(m.kind) && m.kind.length && m.kind.every((k) => KINDS.includes(k)));

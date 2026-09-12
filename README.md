@@ -46,6 +46,18 @@
 除此之外不采集对话正文。Codex 会话优先显示 Codex 自己生成的线程标题（只读查
 `~/.codex` 线程目录，不落入状态文件）。无遥测、无自更新、无远程资源。
 
+## 更新提醒
+
+本插件通过 `updateReminders: true` 参与宿主的登录后新版提醒。发现新版时由宿主询问，
+用户确认后才下载、安装；取消、关闭或超时均保留当前版本，插件不会自行下载执行代码。
+需要支持此声明的宿主构建（该能力尚未随宿主发版）；旧宿主忽略此可选声明。
+已安装的旧插件需先手动更新至包含本声明的版本，才会参与后续提醒。
+
+This plugin opts into host-managed update reminders. The host checks after sign-in and
+asks for confirmation before downloading or installing. Canceling, closing, or letting
+the prompt expire keeps the current version. A supporting host build is required;
+older plugin installations must first be manually updated to a version with this opt-in.
+
 ## 开发
 
 纯 JS、Node 22+、零构建。测试全部离线：`for t in tests/*-test.js; do node "$t"; done`。
