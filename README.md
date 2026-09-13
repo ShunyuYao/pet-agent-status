@@ -9,6 +9,8 @@
 - 安装：宿主设置页「插件 → 手动安装」选择本仓库目录（开发者模式），或等市场上架
 - 设置：宿主设置页「插件」里点本插件的**「打开面板」**，面板右上角 **⚙** 即插件设置
   （Codex App 实时增强开关、Claude Code / Codex CLI 钩子接入、关于与开源地址）
+- 收起：点过的已完成、空闲、状态未知或中断会话会记为已读，重启桌宠后保持收起；
+  同一会话有新事件时自动重新显示。运行中、等待批准的会话不会被点掉。
 
 > 喜欢这个插件的话，欢迎去 GitHub 点个 ⭐️ Star：
 > <https://github.com/ShunyuYao/pet-agent-status>
@@ -31,7 +33,7 @@
 | `fs`/`node:sqlite` **只读** `~/.codex/sqlite/codex-dev.db`、`~/.codex/session_index.jsonl` | 会话行显示 Codex 自己生成的线程标题 | 只读，30s 缓存；读不到自动降级为目录名 |
 | `fs`/`node:sqlite` **只读** `~/.workbuddy/workbuddy.db`（+ `~/.workbuddy/sessions/` 心跳文件） | WorkBuddy 会话状态与标题（官方权威状态就在该表，实测见 `fixtures/workbuddy-facts.md`） | 每 2s 只读轮询；锁死/没装/驱动缺失一律静默降级 |
 
-另使用宿主 SDK：`storage`（含实验开关持久化）`pet`（bubble/playAnim/speak）`pet.badge`
+另使用宿主 SDK：`storage`（实验开关与会话已读记录持久化，仅存会话 ID 和已读时刻）`pet`（bubble/playAnim/speak）`pet.badge`
 （宠物脚下折叠徽标，需宿主 ≥0.19.0，老宿主自动降级）`ui`（面板开关）`events` `scheduler`。
 
 ### Codex App 实时增强（默认开，实验；面板 ⚙ 设置里可关）

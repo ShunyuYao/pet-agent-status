@@ -49,6 +49,7 @@ const OPEN_APP_EVENT = 'agent-status:open-app';                 // panel → too
 // 只有显式存过 false 才算关。刻意不用 manifest entry.settings —— 那份值只有宿主设置页
 // 能写、panel 写不了，两处开关必漂（同好友仓「判据只允许一处」教训）。
 const IPC_ENABLED_KEY = 'codexIpcEnabled';
+const DISMISSED_KEY = 'dismissedSessions';
 
 // 跳转失败的错误条挂多久。留到下一次跳转成功/超时为止，不能永远挂着 ——
 // 用户在别处修好终端后面板还红着，会以为坏了。
@@ -145,10 +146,14 @@ function createCollector(deps) {
   const psTree = (typeof d.psTree === 'function' || Array.isArray(d.psTree)) ? d.psTree : null;
   const jumpRunner = typeof d.jumpRunner === 'function' ? d.jumpRunner : undefined;
   const jumpErrors = new Map();   // sessionId → { text, at }
-  // sessionId → 用户点掉它的时刻。只影响**已结束**的行（done/idle/unknown），
+  // sessionId → 用户点掉它的时刻。只影响可收起态（done/idle/unknown/error），
   // 该会话再有新事件就自动复现（判据是 ts 比较，见 aggregate#isDismissed）。
-  // 不落盘：这是「这一轮看过了」的临时视图状态，重启后重新按真实状态显示。
+  // 经宿主 storage 持久化，首份快照前恢复；不改 hook 状态文件或协议。
   const dismissedAt = new Map();
+  let dismissedLoaded = false;
+  let dismissedDirty = false;
+  let dismissedSync = null;
+  let restoringDismissed = false;
   let psCache = null;             // { at, list } —— 见 PS_CACHE_MS
 
   // 进程表读一次给一轮里所有行共用。terminal-jump 接受「函数或数组」，这里给数组。
@@ -236,17 +241,49 @@ function createCollector(deps) {
     pushSettingsState(pet);
   }
 
-  // dismissedAt 转普通对象给 aggregate。顺带清掉「状态文件已经不在了」的会话记录，
-  // 否则这张表会随会话增长无限变长（同 jumpErrors 的 TTL 清理精神）。
+  // 同一个对象供 aggregate 与 storage 使用，只保存会话 id 和已读时刻。
   function dismissMap() {
-    const out = {};
-    for (const [id, at] of dismissedAt) out[id] = at;
-    return out;
+    return Object.fromEntries(dismissedAt);
+  }
+  function syncDismissed(pet) {
+    if (dismissedSync) return dismissedSync;
+    if (dismissedLoaded && !dismissedDirty) return Promise.resolve();
+    if (!pet || !pet.storage || typeof pet.storage.get !== 'function') return Promise.resolve();
+    // 串行保存：连续点掉多行时，较早的写入不能最后完成而覆盖后面的已读记录。
+    // 读取失败时不写回空表；写入失败保留 dirty，由后续采集轮重试。
+    dismissedSync = Promise.resolve().then(async () => {
+      if (!dismissedLoaded) {
+        const saved = await pet.storage.get(DISMISSED_KEY);
+        if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+          for (const [id, at] of Object.entries(saved)) {
+            if (/^[A-Za-z0-9._-]+$/.test(id) && Number.isFinite(at) && at >= 0) {
+              dismissedAt.set(id, Math.max(at, dismissedAt.get(id) || 0));
+            }
+          }
+        }
+        dismissedLoaded = true;
+      }
+      while (dismissedDirty && typeof pet.storage.set === 'function') {
+        dismissedDirty = false;
+        try { await pet.storage.set(DISMISSED_KEY, dismissMap()); }
+        catch (error) { dismissedDirty = true; throw error; }
+      }
+    }).catch(() => { /* 存储暂不可用不打死采集器，下一轮重试 */ })
+      .finally(() => { dismissedSync = null; });
+    return dismissedSync;
   }
   function pruneDismissed(records) {
     if (dismissedAt.size === 0) return;
-    const alive = new Set(records.map((r) => r.sessionId));
-    for (const id of [...dismissedAt.keys()]) if (!alive.has(id)) dismissedAt.delete(id);
+    // 只清除有更新事件的已读记录。缺文件/读坏可能是暂时故障，不据此永久忘掉用户操作。
+    // 文件消失的会话在 30 天后过期，避免历史标记无限增长。
+    const current = new Map(records.map((r) => [r.sessionId, r]));
+    for (const [id, at] of dismissedAt) {
+      const rec = current.get(id);
+      if ((rec && rec.ts > at) || (!rec && now() - at > 30 * 24 * 60 * 60 * 1000)) {
+        dismissedAt.delete(id);
+        dismissedDirty = true;
+      }
+    }
   }
 
   function handleJump(pet, data) {
@@ -284,7 +321,10 @@ function createCollector(deps) {
     // 执行类失败（osascript 挂了/没装 Codex App）不在其列：那是这次没跳成，留着可重试。
     const dismiss = row && DISMISSIBLE.has(row.state)
       && (result.ok || result.reason === 'unavailable');
-    if (dismiss) dismissedAt.set(sessionId, at);
+    if (dismiss) {
+      dismissedAt.set(sessionId, at);
+      dismissedDirty = true;
+    }
     if (result.ok || dismiss) {
       // 收起的行连同它的错误条一起走：错误条挂在行下方，行都没了留它无处安放
       jumpErrors.delete(sessionId);
@@ -311,6 +351,7 @@ function createCollector(deps) {
 
   // 一轮采集。整体包 try/catch：抛出去会打死宿主定时任务，下一轮就没了。
   function tick(pet) {
+    if (restoringDismissed) return lastSnapshot;
     try {
       const at = now();
       const before = readSnapshots(d.dir);
@@ -338,7 +379,8 @@ function createCollector(deps) {
       // 无独立开关（v1，PROTOCOL.md）：没装 WorkBuddy 时模块自己静默无行为。
       try { workbuddy.tick(); } catch (_) { /* 摄入挂了不打死采集轮 */ }
       const raw = readSnapshots(d.dir);
-      pruneDismissed(raw.records || []);   // 会话文件没了就忘掉它的已读记录
+      pruneDismissed(raw.records || []);
+      void syncDismissed(pet);
       const result = aggregate(raw, {
         now: at, isPidAlive: alive, t,
         canJump: makeCanJump(at),          // 判定实现在 lib/terminal-jump.js，这里只注入
@@ -469,6 +511,7 @@ function createCollector(deps) {
 
   async function start(pet) {
     if (taskId != null) return taskId;   // 启停串行，不重复注册（重复注册 = 泄漏定时器）
+    restoringDismissed = true;
     // 先接意图再起定时器：面板可能在 tick 之前就点了接入
     subscribe(pet, PANEL_READY_EVENT, () => replayPanel(pet));
     subscribe(pet, INSTALL_CLAUDE_EVENT, () => handleInstall(pet));
@@ -488,13 +531,17 @@ function createCollector(deps) {
     });
     // 必须 await：pet.scheduler.every 返回的是 Promise<taskId>，
     // 直接存 Promise 会让 cancel 拿到个对象、恒 miss，旧定时器永不回收（宿主已知坑）。
+    // 已读恢复前只接意图，不采集/回推旧行（包括冷启动时 panel 的语言意图）。
+    await syncDismissed(pet);
     await syncCodexIpc(pet);
+    restoringDismissed = false;
     taskId = await pet.scheduler.every(TICK_MS, () => tick(pet));
     tick(pet);   // 预备首轮；之后新开的面板经 panel-ready 立即取这份结果
     return taskId;
   }
 
   async function stop(pet) {
+    await syncDismissed(pet);
     if (taskId == null) return;
     const id = taskId;
     taskId = null;   // 先清再 cancel：cancel 失败也不该留个假 id 挡住下次 start
