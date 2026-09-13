@@ -42,7 +42,9 @@
     "test:panel-open": "node tests/e2e/panel-open-e2e.js",
     "test:launcher-completion": "node tests/e2e/launcher-completion-e2e.js",
     "test:launcher-completion-offline": "node tests/launcher-completion-test.js",
-    "test:codex-state": "node tests/codex-state-test.js",
-    "test:codex-state-e2e": "node tests/e2e/codex-state-e2e.js"
+    "test:codex-subagent": "node tests/codex-subagent-test.js",
+    "test:codex-state": "node tests/codex-state-test.js && npm run test:codex-subagent",
+    "test:codex-subagent-e2e": "node tests/e2e/codex-subagent-e2e.js",
+    "test:codex-state-e2e": "node tests/e2e/codex-state-e2e.js && npm run test:codex-subagent-e2e"
   }
 }

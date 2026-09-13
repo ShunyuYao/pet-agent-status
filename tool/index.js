@@ -104,7 +104,7 @@ function createCollector(deps) {
   // 工厂可注入：测试绝不碰真 socket（默认路径是真实 ~/.codex/ipc/ipc.sock）。
   const ipcFactory = typeof d.createCodexIpc === 'function' ? d.createCodexIpc : createCodexIpc;
   const threadState = d.threadState || createCodexThreadState({ codexHome: d.codexHome });
-  const ingest = createCodexAppIngest({ dir: d.dir, now, turnFor: id => threadState.read([id]).get(id)?.turn || null });
+  const ingest = createCodexAppIngest({ dir: d.dir, now, threadFor: id => threadState.read([id]).get(id) || null });
   // rollout 活动探测（PROTOCOL.md「rollout 活动信号」）：App 任务 running 的主信号。
   // 可注入：测试用假目录，绝不 stat 真实 ~/.codex/sessions。
   const rollout = d.rolloutActivity || createRolloutActivity({ codexHome: d.codexHome, now });
@@ -355,21 +355,23 @@ function createCollector(deps) {
     try {
       const at = now();
       const before = readSnapshots(d.dir);
+      const isAppRecord = r => r.agent === 'codex' && (r.source === 'ipc' || r.source === 'reconcile');
+      const ids = new Set((before.records || []).filter(isAppRecord).map(r => r.threadId || r.sessionId));
+      if (codexIpc) for (const id of codexIpc.followingIds()) ids.add(id);
+      // Identity filtering also applies to historical records when enhancement is off.
+      // Keep missing entries so tracked rollout paths survive optional DB failures.
+      let metadata = new Map();
+      try { metadata = threadState.read([...ids]); } catch (_) { /* unavailable metadata fails open */ }
+      for (const id of ids) if (!metadata.has(id)) metadata.set(id, {});
       // rollout 活动摄入放在读快照**之前**：本轮写下的 running 本轮就进面板。
       // 与 IPC 增强共用同一开关（关掉增强 = 关掉全部 App 摄入，PROTOCOL.md）。
       // 归属判据（分不清 App/CLI 的活动不落盘）：已有摄入系记录（ingest 内部判）
       // 或 App 正在跟随该线程（following 是纯 App 侧信号）。
       if (ipcEnabled !== false) {
         try {
-          const ids = new Set((before.records || []).filter(r => r.agent === 'codex'
-            && (r.source === 'ipc' || r.source === 'reconcile')).map(r => r.threadId || r.sessionId));
-          if (codexIpc) for (const id of codexIpc.followingIds()) ids.add(id);
-          const metadata = threadState.read([...ids]);
-          // Keep missing entries so already discovered paths remain tracked through a DB failure.
-          for (const id of ids) if (!metadata.has(id)) metadata.set(id, {});
           rolloutActive = rollout.activeThreads(metadata);
           for (const id of rolloutActive.keys()) {
-            ingest.onRolloutActivity(id, (tid) => !!(codexIpc && codexIpc.isFollowing(tid)), metadata.get(id)?.turn || null);
+            ingest.onRolloutActivity(id, (tid) => !!(codexIpc && codexIpc.isFollowing(tid)), metadata.get(id) || null);
           }
         } catch (_) { rolloutActive = new Map(); }   // 探测挂了不打死采集轮
       } else if (rolloutActive.size) {
@@ -381,7 +383,11 @@ function createCollector(deps) {
       const raw = readSnapshots(d.dir);
       pruneDismissed(raw.records || []);
       void syncDismissed(pet);
-      const result = aggregate(raw, {
+      // Filter before all shared outputs: rows, counts, focus, launchers, badge and
+      // pet notifications. Keep disk records unchanged and never suppress hooks.
+      const visible = { ...raw, records: (raw.records || []).filter(r => !isAppRecord(r)
+        || metadata.get(r.threadId || r.sessionId)?.isSubagent !== true) };
+      const result = aggregate(visible, {
         now: at, isPidAlive: alive, t,
         canJump: makeCanJump(at),          // 判定实现在 lib/terminal-jump.js，这里只注入
         // 无 tty 行的可点判定：两条并列的路各自唯一实现——Codex App 深链接

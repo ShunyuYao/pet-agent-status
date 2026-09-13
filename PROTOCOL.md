@@ -123,6 +123,20 @@ IPC 摄入**跳过不覆盖**。IPC 记录的清理走既有 idle 淡出与 24h 
 
 ### rollout 活动与回合屏障（source:'reconcile'，2026-09-12 修订）
 
+**Codex App 子 Agent 过滤（2026-09-13）**：按已知候选线程 ID，只读
+`state_5.sqlite.threads.source/thread_source` 与 `thread_spawn_edges` 的父子 ID。
+结构化 `source.subagent`、明确的 `thread_source=subagent/guardian_review`，或合法的
+spawn 父子关系，均证明该线程是内部子 Agent（包括 review/compact/guardian）。
+新 IPC/rollout 摄入跳过这些线程；历史 ipc/reconcile 状态也在聚合之前排除，不进入
+面板、计数、聚焦、App 完成点、徽标或宠物联动。父任务仍按自身事件显示。
+关闭 IPC 增强后，历史记录仍执行该过滤；不删除历史文件，沿用既有过期清理。
+
+身份只存在采集器内存，不新增或改变状态文件字段（仍写 schema:2，兼容读 schema:1）。
+只缓存已经确认的子 Agent；查不到、缺列、锁库、未知来源均不猜，后续采集重试。
+元数据延迟时可能短暂沿用原显示，确认后即排除；已确认身份在本次运行内不因数据库
+短暂失效而回退。重启后重新核验。不得以标题、目录缺席、普通 fork 信息或未知来源
+为依据隐藏用户任务。hook 来源不受 App 过滤影响。
+
 - 运行活动仍只读取 rollout 的文件名与 stat，不读取会话正文。mtime 距今 ≤30s
   是心跳候选，**不是**完成后重新运行的充分条件。
 - 每轮只读 `thread_history_1.sqlite.thread_turns` 的最新回合编号、状态、起止时间
