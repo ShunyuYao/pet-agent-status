@@ -160,3 +160,30 @@
 - 完成仍只认原已验证的 IPC true，不以数据库里的历史 completed 主动新增完成任务。
 - 回归入口：`test:codex-state` 与 `test:codex-state-e2e`。所有输入均为临时 SQLite 元数据、
   临时 rollout 文件活动和真实形态 IPC 帧；真宿主含完成气泡、面板、徽标与重启路径。
+
+## 12. 2026-09-14 排队续聊被上一轮完成通知锁住【本机元数据 + 自动化复现】
+
+- 用户截图：Codex「梳理自定义形象和动作需求」仍显示执行中，插件显示空列表；用户说明
+  前一轮结束后正在执行排队的后续 prompt。
+- 只读本机回合元数据：前一轮 completed_at 与下一轮 started_at 同为
+  2026-09-14 16:09:29（北京时间）。排查时该任务已经在之后的新回合恢复 running。
+  未读取 rollout 正文；只检查回合 ID/状态/时间与文件 stat。没有保存故障时刻 IPC，
+  因而以下是可复现的充分致因，不能冒称已经抓到那一刻的完整真实帧序列。
+- 本机 ChatGPT.app 的 IPC 发出代码确认 `thread-read-state-changed` 仍只包含
+  conversationId/hostId/hasUnreadTurn/context，**没有 turnId**；发送前还会异步等待
+  read-state context 与 IPC 初始化。不能把到达时的最新回合 ID 当成通知所属回合。
+- 0.12.4 原实现：最新元数据已为 TURN2/inProgress 时收到上一轮 unread=true，
+  却写 `done + turnId:TURN2`；随后 false 写 ended。完成屏障拒绝相同 TURN2 的
+  rollout 活动，故新任务永远无法恢复 running，直到再开 TURN3。
+- 先加自动化、未改实现时的失败证据：离线以临时数据库 + 真形态 IPC 帧 + 持续文件活动
+  复现 21 分钟后 snapshot 中会话为 undefined；隐藏隔离宿主先证明运行行与徽标可达，
+  再发迟到 unread/read 通知并点击该会话，连续快照报 `unexpected state undefined`，
+  截图显示「还没有正在进行的会话」。宿主使用临时 PET_USERDATA_DIR、独立端口，
+  不修改日常 profile、不启动可见窗口。
+- 修复：有回合元数据时，未读通知不能直接关闭 inProgress/未知状态回合；保留通知到
+  同回合明确结束后再落盘，切换到不同回合则丢弃旧通知。核验在常规采集轮执行，
+  不依赖文件是否继续追加。已有完成记录的同回合屏障仍有效。
+- 回归还覆盖已读先到、正常完成气泡/徽标、无新鲜 rollout、数据库暂不可用、未知状态、
+  无记录/following、关闭增强、重启、hook 保护与子 Agent 过滤。旧用例中直接拿
+  `inProgress + unread=true` 要求立刻 done 的断言已改为等待回合核验；这是本次修复
+  必须纠正的错误时序假设，不是取消完成后的防复活断言。

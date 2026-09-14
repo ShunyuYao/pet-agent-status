@@ -113,7 +113,7 @@ App 任务与 CLI 会话在协议上同构，差别有三处：
 | IPC 广播 | 写入 state | 语义依据 |
 |---|---|---|
 | `thread-queued-followups-changed`（带 `conversationId`） | `running` | ⚠️ 2026-09-11 第四轮实测反证（facts §10.1）：**普通提交时刻不发**，不可当 running 的主依据；映射保留（真发了仍是活动证据），running 的主信号改为 rollout 活动（见下节） |
-| `thread-read-state-changed` 且 `hasUnreadTurn === true` | `done` | 实录×2 + 反例×1：仅在回合结束时刻发出，运行中不发（时序实验见 facts §8）。**这是唯一允许映射为 done 的 IPC 信号** |
+| `thread-read-state-changed` 且 `hasUnreadTurn === true` | 回合核验后 `done` | 回合结束的未读信号，但不携带 turnId；排队续聊时可与新回合运行重叠（facts §12）。最新回合仍在运行时暂存通知，不写终态。**这是唯一允许映射为 done 的 IPC 信号** |
 | `thread-read-state-changed` 且 `hasUnreadTurn === false` | `ended`（仅更新已存在的摄入系记录，绝不新建；**该线程 rollout 活动新鲜时跳过**） | 用户在 App 里读过了 = 已结束展示；对没见过的会话新建一条 `ended` 是在报旧闻。实测（facts §10.1）提交时刻 App 会发一条 false（用户正看着线程），若不带活动豁免会把刚开跑的任务当场翻成已结束 |
 | `thread-stream-following-changed` | 不落盘 | 只进内存 following 集合，供聚焦（focus）同级优先 |
 | 其余（含 `thread-stream-state-changed`） | 忽略 | 实录证实被动外部 client **收不到** stream-state 广播（facts §8）；未实录语义一律不猜 |
@@ -142,7 +142,14 @@ spawn 父子关系，均证明该线程是内部子 Agent（包括 review/compac
 - 每轮只读 `thread_history_1.sqlite.thread_turns` 的最新回合编号、状态、起止时间
   （按 rollout_ordinal 排序）。只认 `inProgress/completed/failed/interrupted`；未知值
   不作活动证据，不读取 error_json、thread_items 或其他正文列。
-- 收到 IPC 完成事件时写 done，并记录可用的最新 `turnId`。已完成/已结束的记录，
+- 收到 IPC 完成事件时，已知最新回合为 `inProgress` 或未知状态则先在内存暂存通知
+  与该回合 ID，不得把正在运行的回合直接写成 done。每轮采集核验：同一回合明确为
+  completed/failed/interrupted 后，才落 done（期间收到已读则落 ended）；已进入不同
+  回合则丢弃旧通知。核验不依赖 rollout 新鲜度，数据库暂不可用则继续等待。
+  没有回合元数据且没有待核验通知时，沿用原 IPC 降级路径，不改变文件字段。
+  通知仅在内存保存，关闭增强或停止插件时清除；重启不根据历史数据库补发完成。
+  本修复不改变状态文件格式，仍写 schema:2、兼容读 schema:1。
+- 写入已核验完成记录时保存该回合 `turnId`。已完成/已结束的记录，
   只有明确的**不同回合**且状态为 `inProgress` 才能由 rollout 恢复 running。
   同一回合收尾写入、mtime 不变、插件重启均不能穿过该屏障。
 - 对 schema:1 或尚无 turnId 的终态记录，需最新 inProgress 回合的 started_at

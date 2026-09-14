@@ -58,6 +58,7 @@ async function rig() {
     assert.equal(snap.summary.running, 1); assert.equal(snap.summary.done, 0); assert.equal(snap.summary.focus.sessionId, PARENT);
     assert.equal(r.output().apps[0].pendingDone, 0); assert.deepEqual(r.output().badge.segments, [{tone:'primary',text:'1'}]);
     assert.equal(r.bubbles.length, 0);
+    r.data.turn(PARENT, 'completed', r.now());
     r.done(PARENT); assert.equal(r.tick().summary.done, 1);
     assert.equal(r.output().apps[0].pendingDone, 1); assert.equal(r.bubbles.length, 1, 'positive control: parent completion still notifies');
   });

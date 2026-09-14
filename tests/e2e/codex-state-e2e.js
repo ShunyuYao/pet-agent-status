@@ -47,25 +47,28 @@ const sockets = new Set();
     await enable();
     const t0 = Date.now(); data.rollout(t0, 4); data.turn(TURN1, 'inProgress', t0);
     await waitState('running');
-    const overlay = await host.waitFor(() => host.findTarget('pet-overlay.html'), 'pet overlay');
+    let overlay = await host.waitFor(() => host.findTarget('pet-overlay.html'), 'pet overlay');
     const badge = () => host.evaluate("[...document.querySelectorAll('#agent-badge .agent-badge__seg')].map(el=>({className:el.className,text:el.querySelector('.agent-badge__text')?.textContent}))", overlay);
     await host.waitFor(async () => (await badge()).some(s => s.className.includes('agent-badge__seg--primary') && s.text === '1'), 'running badge shows task');
     console.log('  ok old task file -> real running panel and badge');
     const doneAt = Date.now();
     feed('thread-read-state-changed', { hasUnreadTurn: true });
-    await host.waitFor(() => read().state === 'done', 'completion IPC written');
-    // Keep the DB inProgress for one poll: delayed metadata must not defeat IPC completion.
+    // Unscoped IPC cannot complete a running turn. The real scheduler retains the
+    // signal until the metadata projection confirms that this turn has ended.
+    await assertStateAcrossPolls('running');
+    data.turn(TURN1, 'completed', t0, 1, doneAt);
     await waitState('done');
     assert.equal(read().turnId, TURN1);
     await host.waitFor(async () => /Codex App/.test(await host.evaluate("document.getElementById('bubble')?.textContent || ''", overlay)), 'completion bubble rendered');
     await host.waitFor(async () => (await badge()).some(s => s.className.includes('agent-badge__seg--success') && s.text === '1'), 'completion badge retains task');
     data.turn(TURN1, 'completed', t0, 1, doneAt); data.append(Date.now());
     await assertStateAcrossPolls('done');
-    console.log('  ok done survives stale metadata, final flush and three scheduled polls; pet bubble rendered');
+    console.log('  ok IPC waits for metadata, then done survives final flush and three polls; pet bubble rendered');
     feed('thread-read-state-changed', { hasUnreadTurn: false });
     await host.waitFor(() => read().state === 'ended', 'reading result recorded');
     await assertStateAcrossPolls('done');
     await host.restart(); await enable(); await waitState('done');
+    overlay = await host.waitFor(() => host.findTarget('pet-overlay.html'), 'restarted pet overlay');
     data.append(Date.now()); await assertStateAcrossPolls('done');
     console.log('  ok read result and host restart preserve completion barrier');
     const nextAt = Date.now(); data.turn(TURN2, 'inProgress', nextAt, 50); data.append(nextAt);
@@ -74,9 +77,32 @@ const sockets = new Set();
     await waitState('running'); assert.equal(read().turnId, TURN2);
     feed('thread-read-state-changed', { hasUnreadTurn: false }); await assertStateAcrossPolls('running');
     console.log('  ok next turn in old task resumes without being ended by read-state');
+    // Previous completion notification can arrive after the queued turn has started.
+    feed('thread-read-state-changed', { hasUnreadTurn: true });
+    feed('thread-read-state-changed', { hasUnreadTurn: false });
+    await host.evaluate("new Promise(resolve => window.pet.events.on('agent-status:snapshot', () => resolve(true)))");
+    await host.evaluate(`(()=>{const el=document.querySelector('.row[data-session-id="${CID}"]');
+      if(!el || getComputedStyle(el).cursor!=='pointer') throw Error('task row must be clickable');
+      el.dispatchEvent(new MouseEvent('click',{bubbles:true}));})()`);
+    await assertStateAcrossPolls('running');
+    assert.equal(read().turnId, TURN2);
+    await host.waitFor(async () => (await badge()).some(s => s.className.includes('agent-badge__seg--primary') && s.text === '1'), 'queued turn keeps running badge');
+    console.log('  ok delayed previous completion and task click cannot hide the queued turn');
+    await host.screenshot(path.join(host.paths.artifacts, 'codex-queued-running-panel.png'));
+    data.turn(TURN2, 'completed', nextAt, 50, Date.now());
+    feed('thread-read-state-changed', { hasUnreadTurn: true });
+    await waitState('done');
+    await host.waitFor(async () => (await badge()).some(s => s.className.includes('agent-badge__seg--success') && s.text === '1'), 'queued turn actual completion shows success badge');
+    await assertStateAcrossPolls('done');
+    console.log('  ok queued turn actual completion still reaches panel and badge');
     assert.equal(host.errors.length, 0, JSON.stringify(host.errors));
     await host.screenshot(path.join(host.paths.artifacts, 'codex-state-panel.png'));
     console.log('codex-state-e2e: passed; evidence:', host.paths.artifacts);
+  } catch (error) {
+    if (host) console.error('Targets at failure:', await host.targets().then(targets => targets.map(({id,url}) => ({id,url}))).catch(e => e.message));
+    if (host?.panel) await host.screenshot(path.join(host.paths.artifacts, 'codex-state-failure.png')).catch(() => {});
+    if (host) console.error('Failure evidence:', host.paths.artifacts);
+    throw error;
   } finally {
     for (const socket of sockets) socket.destroy();
     if (server) await new Promise(resolve => server.close(resolve));

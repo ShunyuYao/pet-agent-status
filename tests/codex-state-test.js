@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { EventEmitter } = require('events');
-const { createCollector, SNAPSHOT_EVENT } = require('../tool');
+const { createCollector, SNAPSHOT_EVENT, SET_SETTING_EVENT } = require('../tool');
 const { createCodexIpc, encodeFrame } = require('../lib/codex-ipc');
 const sf = require('../lib/state-files');
 const { createData, CID, TURN1, TURN2 } = require('./fixtures/codex-state-data');
@@ -14,13 +14,15 @@ async function rig() {
   const home = path.join(root, 'codex'), dir = path.join(root, 'state');
   const data = createData(home); let at = T0, scheduled, socket, collector;
   const snapshots = [], bubbles = [];
+  const settings = new Map([['codexIpcEnabled', true]]), listeners = new Map();
   const pet = {
-    events: { on() {}, emit(name, value) { if (name === SNAPSHOT_EVENT) snapshots.push(value); } },
-    storage: { async get() { return true; } },
+    events: { on(name, fn) { listeners.set(name, fn); }, emit(name, value) { if (name === SNAPSHOT_EVENT) snapshots.push(value); } },
+    storage: { async get(key) { return settings.get(key); }, async set(key, value) { settings.set(key, value); } },
     scheduler: { async every(ms, fn) { scheduled = fn; return 'timer'; }, async cancel() {} },
     pet: { bubble: text => bubbles.push(text), playAnim() {} }
   };
   const boot = async () => {
+    listeners.clear();
     collector = createCollector({
       dir, codexHome: home, now: () => at,
       settingsFile: path.join(root, 'claude.json'), codexHooksFile: path.join(root, 'hooks.json'),
@@ -37,17 +39,34 @@ async function rig() {
   const tick = () => { scheduled(); return snapshots.at(-1).rows.find(r => r.sessionId === CID); };
   await boot();
   return { root, home, dir, data, feed, tick, bubbles, read: () => sf.readStatus(CID, dir), setTime: t => { at = t; },
+    setting: async value => { listeners.get(SET_SETTING_EVENT)({key:'codexIpcEnabled', value}); await new Promise(resolve => setImmediate(resolve)); },
     restart: async () => { await collector.stop(pet); await boot(); },
     close: async () => { await collector.stop(pet); data.close(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
 (async () => {
   let passed = 0;
   async function test(name, fn) { const r = await rig(); try { await fn(r); passed++; console.log('  ok', name); } finally { await r.close(); } }
+  await test('排队续聊先开跑、上一轮未读通知后到达，长任务仍持续显示', async r => {
+    r.data.rollout(T0, 4); r.data.turn(TURN1, 'inProgress', T0);
+    assert.equal(r.tick().state, 'running', 'positive control: initial turn is visible');
+    r.data.turn(TURN1, 'completed', T0, 1, T0 + 1000);
+    r.setTime(T0 + 1000); r.data.turn(TURN2, 'inProgress', T0 + 1000, 50);
+    r.data.append(T0 + 1000);
+    r.feed('thread-read-state-changed', { hasUnreadTurn: true });
+    r.feed('thread-read-state-changed', { hasUnreadTurn: false });
+    // Real long-running continuation: file activity continues after old done rows expire.
+    r.setTime(T0 + 21 * 60000); r.data.append(T0 + 21 * 60000);
+    assert.equal(r.tick()?.state, 'running', 'queued prompt must not disappear into the empty panel');
+    assert.equal(r.read().turnId, TURN2);
+    assert.equal(r.bubbles.length, 0, 'previous turn must not announce the running continuation as complete');
+  });
   await test('完成事件后旧活动不得覆盖 done，重启和收尾追加也不得复活', async r => {
     r.data.rollout(T0); r.data.turn(TURN1, 'inProgress', T0);
     assert.equal(r.tick().state, 'running', 'positive control: real file reaches snapshot');
     r.setTime(T0 + 2000); r.feed('thread-read-state-changed', { hasUnreadTurn: true });
-    assert.equal(r.read().state, 'done', 'positive control: IPC reaches state file');
+    assert.equal(r.tick().state, 'running', 'unscoped completion waits for terminal metadata');
+    assert.equal(r.bubbles.length, 0, 'no premature completion notification');
+    r.data.turn(TURN1, 'completed', T0, 1, T0 + 2000);
     assert.equal(r.tick().state, 'done', 'completion must survive next scheduled poll');
     assert.equal(r.bubbles.length, 1, 'completion reaches pet notification');
     r.data.turn(TURN1, 'completed', T0, 1, T0 + 2000);
@@ -61,6 +80,7 @@ async function rig() {
   await test('旧任务的新回合可以重新运行，心跳计时连续', async r => {
     r.data.rollout(T0, 4); r.data.turn(TURN1, 'inProgress', T0);
     assert.equal(r.tick().state, 'running', 'older directory is tracked by exact path');
+    r.data.turn(TURN1, 'completed', T0, 1, T0 + 1000);
     r.feed('thread-read-state-changed', { hasUnreadTurn: true }); assert.equal(r.tick().state, 'done');
     r.setTime(T0 + 5000); r.data.turn(TURN2, 'inProgress', T0 + 5000, 50); r.data.append(T0 + 5000);
     assert.equal(r.tick().state, 'running'); const since = r.read().since;
@@ -70,6 +90,7 @@ async function rig() {
   });
   await test('数据库不可用时不能凭收尾写入覆盖完成，恢复后识别新回合', async r => {
     r.data.rollout(T0); r.data.turn(TURN1, 'inProgress', T0); r.tick();
+    r.data.turn(TURN1, 'completed', T0, 1, T0 + 1000);
     r.feed('thread-read-state-changed', { hasUnreadTurn: true }); r.tick();
     const db = path.join(r.home, 'thread_history_1.sqlite'); fs.renameSync(db, db + '.away');
     r.setTime(T0 + 6000); r.data.append(T0 + 6000); assert.equal(r.tick().state, 'done');
@@ -83,14 +104,17 @@ async function rig() {
   });
   await test('已读先于下一轮扫描到达时，不得把新回合锁成结束', async r => {
     r.data.rollout(T0); r.data.turn(TURN1, 'inProgress', T0); r.tick();
+    r.data.turn(TURN1, 'completed', T0, 1, T0 + 1000);
     r.feed('thread-read-state-changed', { hasUnreadTurn: true }); r.tick();
     r.setTime(T0 + 1000); r.data.turn(TURN2, 'inProgress', T0 + 1000, 50); r.data.append(T0 + 1000);
     r.feed('thread-read-state-changed', { hasUnreadTurn: false });
     assert.equal(r.tick().state, 'running'); assert.equal(r.read().turnId, TURN2);
   });
-  await test('完成后数据库仍滞留同一 inProgress 回合，重启也不能复活', async r => {
+  await test('已核验完成后数据库回退为同一 inProgress 回合，重启也不能复活', async r => {
     r.data.rollout(T0); r.data.turn(TURN1, 'inProgress', T0); r.tick();
+    r.data.turn(TURN1, 'completed', T0, 1, T0 + 1000);
     r.feed('thread-read-state-changed', { hasUnreadTurn: true });
+    r.data.turn(TURN1, 'inProgress', T0);
     await r.restart(); r.setTime(T0 + 3000); r.data.append(T0 + 3000);
     assert.equal(r.tick().state, 'done');
   });
@@ -106,14 +130,95 @@ async function rig() {
     r.data.rollout(T0); r.data.turn(TURN1, 'inProgress', T0); r.tick();
     r.data.turn(TURN1, 'future-state', T0);
     r.feed('thread-read-state-changed', {hasUnreadTurn:false}); assert.equal(r.read().state, 'running');
+    r.data.turn(TURN1, 'completed', T0, 1, T0 + 1000);
     r.feed('thread-read-state-changed', {hasUnreadTurn:true});
     r.data.turn(TURN2, 'future-state', T0 + 1000, 50); r.data.append(T0 + 1000);
     assert.equal(r.tick().state, 'done');
   });
   await test('同回合完成后的队列清理广播不能覆盖完成', async r => {
     r.data.rollout(T0); r.data.turn(TURN1, 'inProgress', T0); r.tick();
+    r.data.turn(TURN1, 'completed', T0, 1, T0 + 1000);
     r.feed('thread-read-state-changed', {hasUnreadTurn:true});
     r.feed('thread-queued-followups-changed', {messages:[]}); assert.equal(r.tick().state, 'done');
+  });
+  await test('已经扫描到续聊回合后，迟到未读与已读通知也不能隐藏它', async r => {
+    r.data.rollout(T0); r.data.turn(TURN1, 'inProgress', T0 - 10000); r.tick();
+    r.data.turn(TURN1, 'completed', T0 - 10000, 1, T0);
+    r.feed('thread-read-state-changed', { hasUnreadTurn: true }); assert.equal(r.tick().state, 'done');
+    r.setTime(T0 + 1000); r.data.turn(TURN2, 'inProgress', T0 + 1000, 50); r.data.append(T0 + 1000);
+    assert.equal(r.tick().state, 'running');
+    r.feed('thread-read-state-changed', { hasUnreadTurn: true });
+    r.feed('thread-read-state-changed', { hasUnreadTurn: false });
+    r.setTime(T0 + 21000); r.data.append(T0 + 21000);
+    assert.equal(r.tick().state, 'running'); assert.equal(r.read().turnId, TURN2);
+    assert.equal(r.bubbles.length, 1, 'only the initial completed turn notified');
+    // Once the continuation actually ends, its completion still reaches the panel.
+    r.data.turn(TURN2, 'completed', T0 + 1000, 50, T0 + 21000);
+    assert.equal(r.tick().state, 'done'); assert.equal(r.read().state, 'ended');
+    assert.equal(r.bubbles.length, 1, 'already-read completion does not emit an unread bubble');
+  });
+  await test('未读信号保留到数据库确认，不依赖新鲜 rollout，也不凭数据库补报历史完成', async r => {
+    r.data.rollout(T0); r.data.turn(TURN1, 'inProgress', T0); r.tick();
+    r.data.turn(TURN1, 'completed', T0, 1, T0 + 1000);
+    r.tick(); assert.equal(r.read().state, 'running', 'terminal metadata alone cannot synthesize completion');
+    r.data.turn(TURN1, 'inProgress', T0);
+    r.feed('thread-read-state-changed', { hasUnreadTurn: true });
+    const db = path.join(r.home, 'thread_history_1.sqlite'); fs.renameSync(db, db + '.away');
+    r.feed('thread-read-state-changed', { hasUnreadTurn: false });
+    r.feed('thread-read-state-changed', { hasUnreadTurn: true });
+    r.setTime(T0 + 60000); r.tick(); assert.equal(r.read().state, 'running');
+    fs.renameSync(db + '.away', db);
+    r.data.turn(TURN1, 'completed', T0, 1, T0 + 1000);
+    assert.equal(r.tick().state, 'done'); assert.equal(r.read().turnId, TURN1);
+    assert.equal(r.bubbles.length, 1);
+  });
+  await test('新回合丢弃旧回合待确认通知，重启不根据数据库补发完成', async r => {
+    r.data.rollout(T0); r.data.turn(TURN1, 'inProgress', T0); r.tick();
+    r.feed('thread-read-state-changed', { hasUnreadTurn: true });
+    r.setTime(T0 + 1000); r.data.turn(TURN2, 'inProgress', T0 + 1000, 50); r.data.append(T0 + 1000);
+    assert.equal(r.tick().state, 'running'); assert.equal(r.read().turnId, TURN2);
+    r.data.turn(TURN2, 'completed', T0 + 1000, 50, T0 + 2000);
+    r.tick(); assert.equal(r.read().state, 'running', 'old notification does not complete a different turn');
+    await r.restart(); r.tick(); assert.equal(r.read().state, 'running');
+    assert.equal(r.bubbles.length, 0);
+    r.feed('thread-read-state-changed', { hasUnreadTurn: true }); assert.equal(r.tick().state, 'done');
+  });
+  await test('没有状态文件或 following 的未读通知，也会继续核验该回合', async r => {
+    r.feed('thread-stream-following-changed', { following: false });
+    r.data.turn(TURN1, 'inProgress', T0);
+    r.feed('thread-read-state-changed', { hasUnreadTurn: true }); assert.equal(r.tick(), undefined);
+    r.data.turn(TURN1, 'completed', T0, 1, T0 + 1000);
+    assert.equal(r.tick().state, 'done'); assert.equal(r.read().turnId, TURN1);
+  });
+  await test('待确认的陌生会话已被读过时，不新建 ended 记录', async r => {
+    r.feed('thread-stream-following-changed', { following: false });
+    r.data.turn(TURN1, 'inProgress', T0);
+    r.feed('thread-read-state-changed', { hasUnreadTurn: true });
+    r.feed('thread-read-state-changed', { hasUnreadTurn: false });
+    r.data.turn(TURN1, 'completed', T0, 1, T0 + 1000);
+    assert.equal(r.tick(), undefined); assert.equal(r.read(), null);
+  });
+  await test('关闭增强或停止插件会丢弃尚未确认的通知', async r => {
+    r.data.rollout(T0); r.data.turn(TURN1, 'inProgress', T0); r.tick();
+    r.feed('thread-read-state-changed', { hasUnreadTurn: true });
+    await r.setting(false);
+    r.data.turn(TURN1, 'completed', T0, 1, T0 + 1000);
+    r.tick(); assert.equal(r.read().state, 'running');
+    await r.setting(true); r.tick(); assert.equal(r.read().state, 'running');
+    r.data.turn(TURN1, 'inProgress', T0);
+    r.feed('thread-read-state-changed', { hasUnreadTurn: true });
+    await r.restart();
+    r.data.turn(TURN1, 'completed', T0, 1, T0 + 1000);
+    r.tick(); assert.equal(r.read().state, 'running'); assert.equal(r.bubbles.length, 0);
+  });
+  await test('未知回合状态等待核验；等待期间出现 hook 记录仍受保护', async r => {
+    r.data.rollout(T0); r.data.turn(TURN1, 'inProgress', T0); r.tick();
+    r.feed('thread-read-state-changed', { hasUnreadTurn: true });
+    r.data.turn(TURN1, 'future-state', T0);
+    r.tick(); assert.equal(r.read().state, 'running');
+    sf.writeStatus({ agent:'codex', sessionId:CID, threadId:CID, cwd:'/fixture', tty:'/dev/ttys901', pid:process.pid, source:'hook', state:'waiting', lastEvent:'PermissionRequest', ts:T0 }, r.dir);
+    r.data.turn(TURN1, 'completed', T0, 1, T0 + 1000);
+    assert.equal(r.tick().state, 'waiting'); assert.equal(r.read().source, 'hook');
   });
   await test('数据库路径越界或符号链接逃逸时，不采集外部文件', async r => {
     const { DatabaseSync } = require('node:sqlite');

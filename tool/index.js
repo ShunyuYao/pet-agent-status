@@ -215,6 +215,7 @@ function createCollector(deps) {
     } else if (!want && codexIpc) {
       codexIpc.stop();
       codexIpc = null;
+      ingest.clearPending();
     }
   }
 
@@ -237,7 +238,7 @@ function createCollector(deps) {
     } catch (_) { /* 存不下也先按用户意图切运行态，下轮读回真值自会纠偏 */ }
     ipcEnabled = value;
     if (value && !codexIpc) await syncCodexIpc(pet);
-    else if (!value && codexIpc) { codexIpc.stop(); codexIpc = null; }
+    else if (!value && codexIpc) { codexIpc.stop(); codexIpc = null; ingest.clearPending(); }
     pushSettingsState(pet);
   }
 
@@ -358,6 +359,7 @@ function createCollector(deps) {
       const isAppRecord = r => r.agent === 'codex' && (r.source === 'ipc' || r.source === 'reconcile');
       const ids = new Set((before.records || []).filter(isAppRecord).map(r => r.threadId || r.sessionId));
       if (codexIpc) for (const id of codexIpc.followingIds()) ids.add(id);
+      if (ipcEnabled !== false) for (const id of ingest.pendingIds()) ids.add(id);
       // Identity filtering also applies to historical records when enhancement is off.
       // Keep missing entries so tracked rollout paths survive optional DB failures.
       let metadata = new Map();
@@ -369,6 +371,7 @@ function createCollector(deps) {
       // 或 App 正在跟随该线程（following 是纯 App 侧信号）。
       if (ipcEnabled !== false) {
         try {
+          for (const id of ingest.pendingIds()) ingest.reconcileReadState(id, metadata.get(id));
           rolloutActive = rollout.activeThreads(metadata);
           for (const id of rolloutActive.keys()) {
             ingest.onRolloutActivity(id, (tid) => !!(codexIpc && codexIpc.isFollowing(tid)), metadata.get(id) || null);
@@ -555,6 +558,7 @@ function createCollector(deps) {
     // 正常停用时自己把徽标撤干净（宿主虽有兜底清除，但那是给异常路径的）
     await badgeLink.dispose(pet);
     if (codexIpc) { codexIpc.stop(); codexIpc = null; }
+    ingest.clearPending();
   }
 
   return {
