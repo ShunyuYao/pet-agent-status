@@ -223,6 +223,12 @@ async function start(options = {}) {
     await harness.evaluate(`window.settings.pluginsTogglePanel(${JSON.stringify(manifest.id)})`, harness.settings);
     harness.panel = await waitFor(() => harness.findTarget(manifest.id + '/panel/panel.html'), 'panel target');
     await waitFor(() => harness.evaluate("document.readyState === 'complete' && !!window.pet && !!document.getElementById('gear')"), 'panel loaded');
+    // Production panels close on native blur. Desktop focus changes can reach even
+    // hidden Electron windows, destroying the CDP target during unrelated state
+    // assertions. Keep this isolated test window open through the public SDK;
+    // native focus/blur behavior is explicitly outside this hidden harness.
+    const pinned = await harness.evaluate('window.pet.ui.setPanelPinned(true)');
+    if (pinned !== true) throw new Error('Hidden test panel could not be pinned');
     await harness.evaluate(`new Promise((resolve, reject) => {
       let received = false;
       window.pet.events.on('agent-status:snapshot', async () => {
