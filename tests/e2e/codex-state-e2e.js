@@ -7,7 +7,8 @@ const path = require('path');
 const net = require('net');
 const { start } = require('./hidden-host');
 const { createFrameParser, encodeFrame } = require('../../lib/codex-ipc');
-const { createData, CID, TURN1, TURN2 } = require('../fixtures/codex-state-data');
+const { createData, CID, TURN1, TURN2, RUNTIME } = require('../fixtures/codex-state-data');
+const TURN3 = '00000000-0000-4000-8000-000000000103';
 let host, server, data;
 const sockets = new Set();
 (async () => {
@@ -95,6 +96,25 @@ const sockets = new Set();
     await host.waitFor(async () => (await badge()).some(s => s.className.includes('agent-badge__seg--success') && s.text === '1'), 'queued turn actual completion shows success badge');
     await assertStateAcrossPolls('done');
     console.log('  ok queued turn actual completion still reaches panel and badge');
+    // Real resumed-task shape: App ID stays the same, but the indexed filename
+    // and turn history use a different internal runtime ID. The old turn remains.
+    const resumedAt = Date.now();
+    data.rollout(resumedAt, 5, RUNTIME);
+    data.turn(TURN3, 'inProgress', resumedAt, 1, null, RUNTIME);
+    feed('thread-read-state-changed', { hasUnreadTurn: false });
+    await waitState('running'); assert.equal(read().turnId, TURN3);
+    assert.equal(read().threadId, CID);
+    assert.equal(fs.existsSync(path.join(host.paths.state, RUNTIME + '.json')), false);
+    await host.waitFor(async () => (await badge()).some(s => s.className.includes('agent-badge__seg--primary') && s.text === '1'), 'resumed task uses original row and running badge');
+    await host.restart(); await enable(); await waitState('running');
+    feed('thread-read-state-changed', { hasUnreadTurn: true });
+    await assertStateAcrossPolls('running');
+    data.turn(TURN3, 'completed', resumedAt, 1, Date.now(), RUNTIME);
+    await waitState('done'); assert.equal(read().turnId, TURN3);
+    data.append(Date.now()); await assertStateAcrossPolls('done');
+    feed('thread-read-state-changed', { hasUnreadTurn: false });
+    await host.waitFor(() => read().state === 'ended', 'resumed result read under original App ID');
+    console.log('  ok changed runtime ID resumes original task, survives restart, and preserves actual completion and read state');
     assert.equal(host.errors.length, 0, JSON.stringify(host.errors));
     await host.screenshot(path.join(host.paths.artifacts, 'codex-state-panel.png'));
     console.log('codex-state-e2e: passed; evidence:', host.paths.artifacts);

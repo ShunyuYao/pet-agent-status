@@ -142,6 +142,12 @@ spawn 父子关系，均证明该线程是内部子 Agent（包括 review/compac
 - 每轮只读 `thread_history_1.sqlite.thread_turns` 的最新回合编号、状态、起止时间
   （按 rollout_ordinal 排序）。只认 `inProgress/completed/failed/interrupted`；未知值
   不作活动证据，不读取 error_json、thread_items 或其他正文列。
+- 历史任务续聊可能使用 `rollout-<时间>-<App线程ID>_<运行线程ID>.jsonl`。
+  只从 `state_5.sqlite.threads` 按 App 线程 ID 返回且通过路径校验的 rollout_path
+  解析此对应关系：以运行线程 ID 查询回合，面板、IPC、状态文件与跳转仍保留 App
+  线程 ID。近期文件发现也取下划线前的 App ID，不额外创建内部运行线程行。
+  不混用旧 App ID 下的终态回合；找不到运行线程元数据时沿用既有缺失元数据保护。
+  仅调整内部元数据关联，状态文件字段及含义不变，仍为 schema:2。
 - 收到 IPC 完成事件时，已知最新回合为 `inProgress` 或未知状态则先在内存暂存通知
   与该回合 ID，不得把正在运行的回合直接写成 done。每轮采集核验：同一回合明确为
   completed/failed/interrupted 后，才落 done（期间收到已读则落 ended）；已进入不同

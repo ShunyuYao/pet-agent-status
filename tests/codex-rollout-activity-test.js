@@ -71,6 +71,18 @@ test('② mtime 超窗 → 不报告；窗内窗外并存只报窗内', () => {
   assert.deepStrictEqual([...m.keys()], [CID2]);
 });
 
+test('续聊双 UUID 文件按原任务发现与追踪，不把内部运行 ID 当任务', () => {
+  const home = tmp();
+  const file = touchRollout(dayDirOf(home, NOON), CID, NOON - 1000,
+    `rollout-2026-09-11T12-00-00-${CID}_${CID2}.jsonl`);
+  assert.deepStrictEqual([...rig(home).activeThreads().keys()], [CID]);
+  const old = dayDirOf(home, NOON - 4 * 86400000);
+  const moved = path.join(old, path.basename(file)); fs.renameSync(file, moved);
+  assert.deepStrictEqual([...rig(home).activeThreads(new Map([[CID, { rolloutPath: moved }]])).keys()], [CID]);
+  assert.equal(rig(home).activeThreads(new Map([[CID2, { rolloutPath: moved }]])).size, 0,
+    'indexed path must match the original task ID');
+});
+
 test('③ 昨天目录也扫（跨午夜）；前天不扫', () => {
   const home = tmp();
   const DAY = 24 * 60 * 60 * 1000;

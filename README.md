@@ -29,7 +29,7 @@
 | `fs` **只读** `~/Library/Application Support/Claude/claude-code-sessions/` | Claude Desktop App 会话的行标题（App 落盘的 AI 标题）与「这行是 App 会话」的归属判定 | 只读，30s 缓存；读不到自动降级（无标题、无跳转入口） |
 | `net` 连接 `~/.codex/ipc/ipc.sock` | Codex App 实时增强（**默认开，面板设置里可关**）：只读监听任务动态与跟随状态 | 开关打开时（默认）；故障自动停用 |
 | `fs` **只读 stat** `~/.codex/sessions/` | Codex App 日志文件的活动心跳 | 仅文件名、大小和修改时间，不读取正文；每 2s 检查近期目录及已知任务路径 |
-| `node:sqlite` **只读** `~/.codex/thread_history_1.sqlite`、`~/.codex/state_5.sqlite` | 按已知 App 任务 ID 核验最新回合编号/状态/起止时间、定位旧任务 rollout_path；读取线程 source/thread_source 和 spawn 父子 ID，过滤子 Agent | 不读正文、错误详情或消息表；不可用时保持完成屏障并降级；增强关闭后仍核验已有 App 状态的子 Agent 身份 |
+| `node:sqlite` **只读** `~/.codex/thread_history_1.sqlite`、`~/.codex/state_5.sqlite` | 按已知 App 任务 ID 定位 rollout_path，核验最新回合编号/状态/起止时间（续聊以已校验文件名关联内部运行 ID）；读取线程 source/thread_source 和 spawn 父子 ID，过滤子 Agent | 不读正文、错误详情或消息表；不可用时保持完成屏障并降级；增强关闭后仍核验已有 App 状态的子 Agent 身份 |
 | `fs`/`node:sqlite` **只读** `~/.codex/sqlite/codex-dev.db`、`~/.codex/session_index.jsonl` | 会话行显示 Codex 自己生成的线程标题 | 只读，30s 缓存；读不到自动降级为目录名 |
 | `fs`/`node:sqlite` **只读** `~/.workbuddy/workbuddy.db`（+ `~/.workbuddy/sessions/` 心跳文件） | WorkBuddy 会话状态与标题（官方权威状态就在该表，实测见 `fixtures/workbuddy-facts.md`） | 每 2s 只读轮询；锁死/没装/驱动缺失一律静默降级 |
 

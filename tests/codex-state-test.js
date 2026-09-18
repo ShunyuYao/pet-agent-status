@@ -7,7 +7,7 @@ const { EventEmitter } = require('events');
 const { createCollector, SNAPSHOT_EVENT, SET_SETTING_EVENT } = require('../tool');
 const { createCodexIpc, encodeFrame } = require('../lib/codex-ipc');
 const sf = require('../lib/state-files');
-const { createData, CID, TURN1, TURN2 } = require('./fixtures/codex-state-data');
+const { createData, CID, TURN1, TURN2, RUNTIME } = require('./fixtures/codex-state-data');
 const T0 = new Date(2026, 8, 12, 12).getTime();
 async function rig() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pet-codex-state-'));
@@ -46,6 +46,48 @@ async function rig() {
 (async () => {
   let passed = 0;
   async function test(name, fn) { const r = await rig(); try { await fn(r); passed++; console.log('  ok', name); } finally { await r.close(); } }
+  await test('历史任务内部 ID 改变后续聊，仍显示原任务且完成屏障跟随新回合', async r => {
+    r.data.rollout(T0, 4); r.data.turn(TURN1, 'inProgress', T0);
+    assert.equal(r.tick().state, 'running', 'positive control: original task is visible');
+    r.data.turn(TURN1, 'interrupted', T0, 142, T0 + 1000);
+    r.feed('thread-read-state-changed', { hasUnreadTurn: true });
+    assert.equal(r.tick().state, 'done');
+    const resumedAt = T0 + 86400000;
+    r.setTime(resumedAt); r.data.rollout(resumedAt, 5, RUNTIME);
+    r.data.turn(TURN2, 'inProgress', resumedAt, 1, null, RUNTIME);
+    r.feed('thread-read-state-changed', { hasUnreadTurn: false });
+    assert.equal(r.tick()?.state, 'running', 'resumed task must not disappear behind the old interrupted turn');
+    assert.equal(r.read().threadId, CID); assert.equal(r.read().turnId, TURN2);
+    assert.equal(sf.readStatus(RUNTIME, r.dir), null, 'internal runtime must not become a separate task');
+    await r.restart(); assert.equal(r.tick()?.state, 'running');
+    r.feed('thread-read-state-changed', { hasUnreadTurn: true });
+    assert.equal(r.tick()?.state, 'running', 'delayed completion cannot end the resumed turn');
+    r.data.turn(TURN2, 'completed', resumedAt, 1, resumedAt + 1000, RUNTIME);
+    assert.equal(r.tick().state, 'done'); assert.equal(r.read().turnId, TURN2);
+    r.data.append(resumedAt + 1000); r.setTime(resumedAt + 1000);
+    assert.equal(r.tick().state, 'done', 'final flush cannot revive the completed runtime');
+  });
+  await test('内部 ID 关联缺失或路径不匹配时，不借用其他任务的运行回合', async r => {
+    const { DatabaseSync } = require('node:sqlite');
+    const { createCodexThreadState } = require('../lib/codex-thread-state');
+    r.data.rollout(T0, 4); r.data.turn(TURN1, 'inProgress', T0); r.tick();
+    r.data.turn(TURN1, 'completed', T0, 1, T0 + 1000);
+    r.feed('thread-read-state-changed', { hasUnreadTurn: true }); r.tick();
+    r.setTime(T0 + 5000);
+    const file = r.data.rollout(T0 + 5000, 4, RUNTIME);
+    assert.equal(r.tick().state, 'done', 'missing runtime history cannot cross a completion barrier');
+    r.data.turn(TURN2, 'inProgress', T0 + 5000, 1, null, RUNTIME);
+    const other = path.join(path.dirname(file), `rollout-fixture-${TURN2}_${RUNTIME}.jsonl`);
+    fs.renameSync(file, other);
+    const db = new DatabaseSync(path.join(r.home, 'state_5.sqlite'));
+    db.prepare('UPDATE threads SET rollout_path=? WHERE id=?').run(other, CID);
+    assert.equal(createCodexThreadState({codexHome:r.home}).read([CID]).get(CID).turn.id, TURN1,
+      'mismatched App ID must not authorize the runtime lookup');
+    assert.equal(r.tick().state, 'done');
+    db.prepare('UPDATE threads SET rollout_path=? WHERE id=?').run(file, CID); db.close();
+    fs.renameSync(other, file);
+    assert.equal(r.tick().state, 'running', 'positive control: matching indexed alias resumes');
+  });
   await test('排队续聊先开跑、上一轮未读通知后到达，长任务仍持续显示', async r => {
     r.data.rollout(T0, 4); r.data.turn(TURN1, 'inProgress', T0);
     assert.equal(r.tick().state, 'running', 'positive control: initial turn is visible');
