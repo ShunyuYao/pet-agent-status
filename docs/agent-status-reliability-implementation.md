@@ -58,4 +58,16 @@
 - 真宿主测试均使用临时 PET_USERDATA_DIR、独立调试端口及首帧前隐藏。外部 App 输入使用实际格式的 hook、元数据 SQLite、Unix socket 和状态文件等价物。它们证明插件链路，不冒充真实 App 批准能力验证。
 - 修改的 JS 文件进行 `node --check`；面板内联脚本另有语法检查。
 
-独立 worktree 的 `npm run test:ui` 已通过：25 个离线套件与全部 12 条真宿主 E2E（含嵌套 Codex 子 Agent 用例）。31 个改动/新增 JS 文件语法检查及 diff 空白检查通过。主分支合并后的复验结果将在交付消息中记录。未发版、未打 tag、未 push。
+独立 worktree 的 `npm run test:ui` 已通过：25 个离线套件与全部 12 条真宿主 E2E（含嵌套 Codex 子 Agent 用例）。31 个改动/新增 JS 文件语法检查及 diff 空白检查通过。主分支合并后已复验 25 个离线套件和全部 12 条真宿主 E2E；其中 UI 对齐和 Codex 状态用例各遭遇一次 CDP target closed，独立重跑均通过。不能将本次主分支验收描述为首次全绿。未发版、未打 tag、未 push。
+
+## 主分支验收补充
+
+实现提交：`a717933`。主分支语法及差异空白检查通过。
+
+- 工作树完整成功日志：`/tmp/asr-ui-history.log`。
+- 主分支离线与首次 UI 日志：`/tmp/asr-main-ui.log`。
+- UI 对齐独立重跑：`/tmp/asr-main-ui-parity-retry.log`（18 项通过）。
+- 主分支后续 E2E：`/tmp/asr-main-remaining-e2e.log`。
+- Codex、子 Agent 与新增可靠性用例最终重跑：`/tmp/asr-main-codex-retry.log`（通过）。
+
+两次失败均是面板调试目标关闭，日志未显示插件未处理异常；第二次关闭时宠物、设置及 overlay 目标仍存在。确切关闭原因尚未定位，不能据此宣称自动化已无偶发故障。没有忽略断言、修改宿主或加入失败自动转绿逻辑。
