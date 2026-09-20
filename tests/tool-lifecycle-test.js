@@ -278,7 +278,7 @@ function leakedBackups() {
     assert.strictEqual(data.rows[0].project, 'alpha');
     assert.strictEqual(data.rows[0].state, 'running');
     assert.deepStrictEqual(data.summary, {
-      running: 1, waiting: 0, done: 0, total: 1, unknown: 0, hiddenNoTarget: 0,
+      running: 1, waiting: 0, done: 0, total: 1, unknown: 0, syncPaused: 0, waitingInput: 0, diagnostics: 0, hiddenNoTarget: 0,
       focus: { sessionId: 'a', state: 'running', project: 'alpha' }
     });
   });
@@ -374,9 +374,8 @@ function leakedBackups() {
     await c.start(m.pet);
     const rows = m.state.snapshots()[0].data.rows;
     const bad = rows.find((r) => r.sessionId === 'broken');
-    assert.ok(bad);
-    assert.strictEqual(bad.state, 'unknown');
-    assert.strictEqual(m.state.snapshots()[0].data.summary.unknown, 1);
+    assert.strictEqual(bad, undefined);
+    assert.strictEqual(m.state.snapshots()[0].data.summary.diagnostics, 1);
     assert.deepStrictEqual(m.state.petCalls, [], 'unknown 绝不触发完成提醒');
   });
 
@@ -572,7 +571,7 @@ function leakedBackups() {
     const dir = tmp();
     const f = fakeIpcFactory();
     const m = mockPet();
-    const c = collectorOn(dir, { createCodexIpc: f.factory });
+    const c = collectorOn(dir, { createCodexIpc: f.factory, threadState:{read:ids=>new Map(ids.map(id=>[id,{turn:{id:'00000000-0000-4000-8000-000000000101',status:'inProgress',startedAt:T0}}]))} });
     await c.start(m.pet);
     const cid = '01a08a1d-4f63-7e30-af03-48ae77b414b5';
     // 适配器解出 activity 后就调这个回调（帧→回调链路由 codex-ipc-test/ingest-test 各自守）
@@ -633,7 +632,7 @@ function leakedBackups() {
     data.turn('00000000-0000-4000-8000-000000000101', 'completed', T0 - 3000, 1, clock);
     data.close();
     f.instances[0].deps.onReadState(cid, false);
-    assert.strictEqual(sf.readStatus(cid, dir).state, 'ended', '活动停了，已读该照常转 ended');
+    assert.strictEqual(sf.readStatus(cid, dir).state, 'done', '已读保持执行结果');
     await c.stop(m.pet);
   });
 
@@ -763,14 +762,6 @@ function leakedBackups() {
   assert.deepStrictEqual(leakedBackups(), [], '测试在真实配置旁留下了备份文件');
   });
 
-  for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
-
-  if (failures.length) {
-    console.log(`\ntool-lifecycle-test: ${passed} passed, ${failures.length} FAILED`);
-    process.exit(1);
-  }
-  console.log(`\ntool-lifecycle-test: ${passed} passed`);
-
   // ---- 点完就收起（dismiss）的 tool 层闭环（2026-09-11 用户需求）----
   // aggregate 单测只证明「给了 dismissedAt 就会过滤」；这里证明**点击真的会去记那一笔**，
   // 且记完立刻反映到推给面板的下一份快照里（少了这段，两边各自绿、功能仍是断的）。
@@ -826,7 +817,7 @@ function leakedBackups() {
     c.tick(m.pet);
     const before = m.state.snapshots().pop().data.rows;
     assert.strictEqual(before.length, 1);
-    assert.strictEqual(before[0].state, 'error', '前置：应是 error 态');
+    assert.strictEqual(before[0].state, 'sync-paused', '前置：应是 error 态');
 
     const res = c.handleJump(m.pet, { sessionId: 'ed' });
     assert.strictEqual(res.ok, false, '跳转本身仍如实报告失败');
@@ -845,7 +836,7 @@ function leakedBackups() {
       psTree: () => [{ pid: 1, ppid: 0, comm: '/A/iTerm.app/Contents/MacOS/iTerm2', tty: 'ttys9' }],
     });
     c.tick(m.pet);
-    assert.strictEqual(m.state.snapshots().pop().data.rows[0].state, 'error');
+    assert.strictEqual(m.state.snapshots().pop().data.rows[0].state, 'sync-paused');
     const res = c.handleJump(m.pet, { sessionId: 'ej' });
     assert.strictEqual(res.ok, true);
     assert.strictEqual(m.state.snapshots().pop().data.rows.length, 0, '跳转成功后收起');
@@ -862,4 +853,7 @@ function leakedBackups() {
     const after = m.state.snapshots().pop().data.rows;
     assert.strictEqual(after.length, 1, 'running 行无论跳转结果如何都不许收起');
   });
-})();
+  for (const d of tmpDirs) fs.rmSync(d, {recursive:true,force:true});
+  console.log(`\ntool-lifecycle-test: ${passed} passed, ${failures.length} failed`);
+  if (failures.length) process.exitCode = 1;
+})().catch(error => {console.error(error);process.exitCode=1;});

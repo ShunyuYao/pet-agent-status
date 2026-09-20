@@ -46,12 +46,22 @@ async function rig() {
 (async () => {
   let passed = 0;
   async function test(name, fn) { const r = await rig(); try { await fn(r); passed++; console.log('  ok', name); } finally { await r.close(); } }
+  await test('完成通知缺失时，明确的本轮结束记录仍纠正运行计数', async r => {
+    r.data.rollout(T0, 4); r.data.turn(TURN1, 'inProgress', T0);
+    assert.equal(r.tick().state, 'running');
+    r.data.turn(TURN1, 'completed', T0, 1, T0 + 1000);
+    r.setTime(T0 + 2000);
+    assert.equal(r.tick().state, 'done');
+    assert.equal(r.read().turnId, TURN1);
+    r.data.append(T0 + 3000); r.setTime(T0 + 3000);
+    assert.equal(r.tick().state, 'done');
+  });
   await test('历史任务内部 ID 改变后续聊，仍显示原任务且完成屏障跟随新回合', async r => {
     r.data.rollout(T0, 4); r.data.turn(TURN1, 'inProgress', T0);
     assert.equal(r.tick().state, 'running', 'positive control: original task is visible');
     r.data.turn(TURN1, 'interrupted', T0, 142, T0 + 1000);
     r.feed('thread-read-state-changed', { hasUnreadTurn: true });
-    assert.equal(r.tick().state, 'done');
+    assert.equal(r.tick().state, 'stopped');
     const resumedAt = T0 + 86400000;
     r.setTime(resumedAt); r.data.rollout(resumedAt, 5, RUNTIME);
     r.data.turn(TURN2, 'inProgress', resumedAt, 1, null, RUNTIME);
@@ -115,9 +125,17 @@ async function rig() {
     r.setTime(T0 + 4000); r.data.append(T0 + 4000);
     assert.equal(r.tick().state, 'done', 'final log flush is same completed turn');
     await r.restart(); assert.equal(r.tick().state, 'done', 'restart retains completion barrier');
-    r.feed('thread-read-state-changed', { hasUnreadTurn: false }); assert.equal(r.read().state, 'ended');
+    r.feed('thread-read-state-changed', { hasUnreadTurn: false }); assert.equal(r.read().state, 'done'); assert.equal(r.read().read, true);
     assert.equal(r.tick().state, 'done', 'reading result does not revive task');
     assert.equal(r.bubbles.length, 1, 'no duplicate completion notifications');
+  });
+  await test('迟到未读通知不能撤销同轮已读，也不能刷新完成时间', async r => {
+    r.data.rollout(T0);r.data.turn(TURN1,'inProgress',T0);r.tick();
+    r.setTime(T0+1000);r.data.turn(TURN1,'completed',T0,1,T0+1000);r.tick();
+    const completed=r.read();r.feed('thread-read-state-changed',{hasUnreadTurn:false});
+    r.setTime(T0+2000);r.feed('thread-read-state-changed',{hasUnreadTurn:true});
+    assert.equal(r.read().read,true);assert.equal(r.read().ts,completed.ts);
+    assert.equal(r.read().runId,completed.runId);assert.equal(r.bubbles.length,1);
   });
   await test('旧任务的新回合可以重新运行，心跳计时连续', async r => {
     r.data.rollout(T0, 4); r.data.turn(TURN1, 'inProgress', T0);
@@ -166,7 +184,7 @@ async function rig() {
     r.data.rollout(T0, 4); r.data.turn(TURN1, 'completed', T0 - 120000, 1, T0 - 60000);
     assert.equal(r.tick().state, 'done'); assert.equal(r.read().schema, 1);
     r.data.turn(TURN2, 'inProgress', T0, 50); assert.equal(r.tick().state, 'running');
-    assert.equal(r.read().schema, 2); assert.equal(r.read().turnId, TURN2);
+    assert.equal(r.read().schema, 3); assert.equal(r.read().turnId, TURN2);
   });
   await test('未知回合状态不能恢复完成或让运行中的已读误报结束', async r => {
     r.data.rollout(T0); r.data.turn(TURN1, 'inProgress', T0); r.tick();
@@ -196,18 +214,13 @@ async function rig() {
     assert.equal(r.bubbles.length, 1, 'only the initial completed turn notified');
     // Once the continuation actually ends, its completion still reaches the panel.
     r.data.turn(TURN2, 'completed', T0 + 1000, 50, T0 + 21000);
-    assert.equal(r.tick().state, 'done'); assert.equal(r.read().state, 'ended');
-    assert.equal(r.bubbles.length, 1, 'already-read completion does not emit an unread bubble');
+    assert.equal(r.tick().state, 'done'); assert.equal(r.read().state, 'done'); assert.equal(r.read().read, false);
+    assert.equal(r.bubbles.length, 2, 'previous unscoped read cannot mark the continuation completion read');
   });
-  await test('未读信号保留到数据库确认，不依赖新鲜 rollout，也不凭数据库补报历史完成', async r => {
+  await test('数据库中断期间保留执行事实，恢复后无需未读通知即可收尾', async r => {
     r.data.rollout(T0); r.data.turn(TURN1, 'inProgress', T0); r.tick();
-    r.data.turn(TURN1, 'completed', T0, 1, T0 + 1000);
-    r.tick(); assert.equal(r.read().state, 'running', 'terminal metadata alone cannot synthesize completion');
-    r.data.turn(TURN1, 'inProgress', T0);
-    r.feed('thread-read-state-changed', { hasUnreadTurn: true });
     const db = path.join(r.home, 'thread_history_1.sqlite'); fs.renameSync(db, db + '.away');
-    r.feed('thread-read-state-changed', { hasUnreadTurn: false });
-    r.feed('thread-read-state-changed', { hasUnreadTurn: true });
+    r.feed('thread-read-state-changed', {hasUnreadTurn:true});
     r.setTime(T0 + 60000); r.tick(); assert.equal(r.read().state, 'running');
     fs.renameSync(db + '.away', db);
     r.data.turn(TURN1, 'completed', T0, 1, T0 + 1000);
@@ -220,9 +233,9 @@ async function rig() {
     r.setTime(T0 + 1000); r.data.turn(TURN2, 'inProgress', T0 + 1000, 50); r.data.append(T0 + 1000);
     assert.equal(r.tick().state, 'running'); assert.equal(r.read().turnId, TURN2);
     r.data.turn(TURN2, 'completed', T0 + 1000, 50, T0 + 2000);
-    r.tick(); assert.equal(r.read().state, 'running', 'old notification does not complete a different turn');
-    await r.restart(); r.tick(); assert.equal(r.read().state, 'running');
-    assert.equal(r.bubbles.length, 0);
+    r.tick(); assert.equal(r.read().state, 'done', 'new turn terminal metadata is independent of old notification');
+    await r.restart(); r.tick(); assert.equal(r.read().state, 'done');
+    assert.equal(r.bubbles.length, 1);
     r.feed('thread-read-state-changed', { hasUnreadTurn: true }); assert.equal(r.tick().state, 'done');
   });
   await test('没有状态文件或 following 的未读通知，也会继续核验该回合', async r => {
@@ -230,7 +243,7 @@ async function rig() {
     r.data.turn(TURN1, 'inProgress', T0);
     r.feed('thread-read-state-changed', { hasUnreadTurn: true }); assert.equal(r.tick(), undefined);
     r.data.turn(TURN1, 'completed', T0, 1, T0 + 1000);
-    assert.equal(r.tick().state, 'done'); assert.equal(r.read().turnId, TURN1);
+    assert.equal(r.tick(), undefined); assert.equal(r.read(), null);
   });
   await test('待确认的陌生会话已被读过时，不新建 ended 记录', async r => {
     r.feed('thread-stream-following-changed', { following: false });
@@ -246,12 +259,12 @@ async function rig() {
     await r.setting(false);
     r.data.turn(TURN1, 'completed', T0, 1, T0 + 1000);
     r.tick(); assert.equal(r.read().state, 'running');
-    await r.setting(true); r.tick(); assert.equal(r.read().state, 'running');
+    await r.setting(true); r.tick(); assert.equal(r.read().state, 'done');
     r.data.turn(TURN1, 'inProgress', T0);
     r.feed('thread-read-state-changed', { hasUnreadTurn: true });
     await r.restart();
     r.data.turn(TURN1, 'completed', T0, 1, T0 + 1000);
-    r.tick(); assert.equal(r.read().state, 'running'); assert.equal(r.bubbles.length, 0);
+    r.tick(); assert.equal(r.read().state, 'done'); assert.equal(r.bubbles.length, 1);
   });
   await test('未知回合状态等待核验；等待期间出现 hook 记录仍受保护', async r => {
     r.data.rollout(T0); r.data.turn(TURN1, 'inProgress', T0); r.tick();

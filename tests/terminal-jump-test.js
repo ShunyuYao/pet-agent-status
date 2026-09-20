@@ -356,8 +356,8 @@ test('unknown 行（文件读不出来）canJump=false', () => {
   fs.writeFileSync(path.join(dir, 'broken.json'), '{ 半截');
   const snap = agg.aggregate(sf.readSnapshots(dir),
     { now: T0, isPidAlive: () => true, t, canJump: () => true });
-  assert.strictEqual(snap.rows[0].state, 'unknown');
-  assert.strictEqual(snap.rows[0].canJump, false);
+  assert.strictEqual(snap.rows.length, 0);
+  assert.strictEqual(snap.summary.diagnostics, 1);
 });
 
 test('jumpErrors 经 aggregate 落到对应行上，别的行不受影响', () => {

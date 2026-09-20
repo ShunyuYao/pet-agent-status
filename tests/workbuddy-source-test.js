@@ -161,7 +161,7 @@ test('⑤ pending 有活动新鲜 → waiting；陈旧无记录 → 不报旧闻
   upsert(home, { id: U2, status: 'pending', updated_at: clock.t - ACTIVE_WINDOW_MS - 1000, last_activity_at: clock.t - ACTIVE_WINDOW_MS - 2000 });
   makeSource(home, dir, clock).tick();
   const rec = readRec(dir, U1);
-  assert.strictEqual(rec.state, 'waiting');
+  assert.strictEqual(rec.state, 'waiting-input');
   assert.strictEqual(rec.lastEvent, 'poll:awaiting-input');
   assert.strictEqual(readRec(dir, U2), null, '陈旧 pending 不新建');
 });
@@ -222,9 +222,9 @@ test('⑧ failed → done 记真实 status；terminated → ended', () => {
   upsert(home, { id: U1, status: 'failed', updated_at: clock.t - 500 });
   upsert(home, { id: U2, status: 'Terminated', updated_at: clock.t - 500 });   // 落库大小写混用（facts §3.2）
   src.tick();
-  assert.strictEqual(readRec(dir, U1).state, 'done');
+  assert.strictEqual(readRec(dir, U1).state, 'failed');
   assert.strictEqual(readRec(dir, U1).lastEvent, 'poll:status-failed');
-  assert.strictEqual(readRec(dir, U2).state, 'ended');
+  assert.strictEqual(readRec(dir, U2).state, 'stopped');
 });
 
 // ⑨ 未知 status
@@ -319,6 +319,16 @@ test('⑭ done 后追问回 working → running 复活且 since 重起', () => {
   const rec = readRec(dir, U1);
   assert.strictEqual(rec.state, 'running');
   assert(rec.since > firstSince, '新活跃段 since 重起（不是继承旧段）');
+});
+
+test('已跟踪任务掉出最近 20 条后仍核对失败结果', () => {
+  const home=makeHome(),dir=tmp(),clock={t:1789142000000};
+  upsert(home,{id:U1,status:'working',updated_at:clock.t});
+  const src=makeSource(home,dir,clock);src.tick();assert.strictEqual(readRec(dir,U1).state,'running');
+  upsert(home,{id:U1,status:'failed',updated_at:clock.t+1});
+  for(let i=0;i<25;i++)upsert(home,{id:`00000000-0000-4000-8000-${String(i+1000).padStart(12,'0')}`,status:'completed',updated_at:clock.t+2+i});
+  clock.t+=1000;src.tick();assert.strictEqual(readRec(dir,U1).state,'failed');
+  assert.strictEqual(stateFiles.readSnapshots(dir).records.length,1,'historical completions are not imported');
 });
 
 for (const d of tmpDirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (_) {} }

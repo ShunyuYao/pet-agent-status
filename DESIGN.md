@@ -105,3 +105,10 @@
 
 running=Primary 蓝；waiting=Warning 橙（行高亮+置顶）；done=Success 绿；error=Danger 红
 （推导态）；idle/unknown=Gray（unknown 文案与 idle 区分，绝不误报完成）。
+
+## ASR 状态可靠性扩展（2026-09-20）
+
+已重新读取在线 Figma `UJimpWGl2hGkrbzxIVCAK5` / `40:41` 并查看截图。保持 320×420、49px 会话行、原图标与底栏不变。
+新状态复用现有语义色：等待输入沿用等待批准的橙色行；失败沿用 error 红色；停止、同步暂停沿用灰色行。同步暂停副行说明最后确认的状态，完整文案放行的 title，不能使用绿色或运行计数。
+汇总仍最多两段，等待批准/输入、运行、同步暂停、完成依次取非零项；诊断数量与后台隐藏数量共用原有提示位置。设置连接状态说明批准检测尚不可用，不能以绿色“已连接”暗示全部能力正常。
+新状态参照已补在在线 Figma [112:2](https://www.figma.com/design/UJimpWGl2hGkrbzxIVCAK5?node-id=112-2)：直接复用原图标、行几何和字体，包含等待输入、失败、停止、同步暂停四行。原 Figma 四行与素材的视觉断言继续保留。

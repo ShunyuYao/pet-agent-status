@@ -75,7 +75,7 @@ async function rig() {
     r.data.thread(CHILD, childSource()); r.seed(CHILD); const before = r.read(CHILD);
     r.advance(5000); r.data.turn(CHILD, 'inProgress', r.now(), NEXT, 2); r.data.rollout(CHILD, r.now()); r.follow(CHILD);
     assert.equal(r.tick().rows.length, 0); assert.deepEqual(r.read(CHILD), before);
-    r.seed(CHILD, 'waiting', {source:'hook',form:'cli',tty:'/dev/ttys901',pid:process.pid});
+    r.seed(CHILD, 'waiting', {turnId:NEXT,source:'hook',form:'cli',tty:'/dev/ttys901',pid:process.pid});
     r.done(CHILD); assert.equal(r.tick().rows[0].state, 'waiting'); assert.equal(r.read(CHILD).source, 'hook');
   });
   await test('只认明确子 Agent 证据：source 各形态、thread_source 与 spawn edge；不猜标题/fork/未知值', async r => {
@@ -86,17 +86,17 @@ async function rig() {
     r.data.thread(GUARDIAN, null, 'guardian_review'); r.done(GUARDIAN); assert.equal(r.read(GUARDIAN), null);
     const edgeId = '00000000-0000-4000-8000-000000000990'; r.data.thread(edgeId, null, null); r.data.edge(edgeId); r.done(edgeId); assert.equal(r.read(edgeId), null);
     for (const source of ['vscode', 'cli', 'exec', 'unknown', '{broken', '{"forked_from_id":"'+PARENT+'"}', '{"subagent":null}']) {
-      const id = `00000000-0000-4000-8000-${String(n++).padStart(12,'0')}`; r.data.thread(id, source, null); r.done(id); assert.equal(r.read(id).state, 'done', source);
+      const id = `00000000-0000-4000-8000-${String(n++).padStart(12,'0')}`; r.data.thread(id, source, null); r.seed(id); r.done(id); assert.equal(r.read(id).state, 'done', source);
     }
-    r.data.thread(PARENT, 'vscode'); r.data.edge(PARENT, 'bad-parent'); r.done(PARENT); assert.equal(r.read(PARENT).state, 'done');
+    r.data.thread(PARENT, 'vscode'); r.data.edge(PARENT, 'bad-parent'); r.seed(PARENT); r.done(PARENT); assert.equal(r.read(PARENT).state, 'done');
   });
   await test('元数据晚到后自动排除；确认过的身份在读取失败时保持，未知结果持续重试', async r => {
-    r.done(CHILD); assert.equal(r.tick().rows.length, 1, 'missing metadata fails open');
+    r.seed(CHILD); r.done(CHILD); assert.equal(r.tick().rows.length, 1, 'missing metadata fails open');
     r.data.thread(CHILD, childSource()); assert.equal(r.tick().rows.length, 0, 'late metadata removes existing row');
     const db = path.join(r.home, 'state_5.sqlite'); fs.renameSync(db, db + '.away');
     const before = r.read(CHILD); r.advance(2000); r.done(CHILD);
     assert.deepEqual(r.read(CHILD), before); assert.equal(r.tick().rows.length, 0, 'cached child does not reappear');
-    r.done(PARENT); assert.equal(r.tick().rows.length, 1, 'unclassified parent survives database failure');
+    r.seed(PARENT); r.done(PARENT); assert.equal(r.tick().rows.length, 1, 'unclassified parent survives database failure');
     fs.renameSync(db + '.away', db); r.data.thread(PARENT); assert.equal(r.tick().summary.done, 1);
   });
   await test('旧库缺身份列/关系表仍可读取回合与路径；单个身份来源缺失不废掉其他证据', async r => {

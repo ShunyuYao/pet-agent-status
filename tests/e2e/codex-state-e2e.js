@@ -53,7 +53,7 @@ const sockets = new Set();
     await host.waitFor(async () => (await badge()).some(s => s.className.includes('agent-badge__seg--primary') && s.text === '1'), 'running badge shows task');
     console.log('  ok old task file -> real running panel and badge');
     const doneAt = Date.now();
-    feed('thread-read-state-changed', { hasUnreadTurn: true });
+    // Completion notification is deliberately absent.
     // Unscoped IPC cannot complete a running turn. The real scheduler retains the
     // signal until the metadata projection confirms that this turn has ended.
     await assertStateAcrossPolls('running');
@@ -66,7 +66,7 @@ const sockets = new Set();
     await assertStateAcrossPolls('done');
     console.log('  ok IPC waits for metadata, then done survives final flush and three polls; pet bubble rendered');
     feed('thread-read-state-changed', { hasUnreadTurn: false });
-    await host.waitFor(() => read().state === 'ended', 'reading result recorded');
+    await host.waitFor(() => read().state === 'done' && read().read === true, 'reading result recorded');
     await assertStateAcrossPolls('done');
     await host.restart(); await enable(); await waitState('done');
     overlay = await host.waitFor(() => host.findTarget('pet-overlay.html'), 'restarted pet overlay');
@@ -113,7 +113,7 @@ const sockets = new Set();
     await waitState('done'); assert.equal(read().turnId, TURN3);
     data.append(Date.now()); await assertStateAcrossPolls('done');
     feed('thread-read-state-changed', { hasUnreadTurn: false });
-    await host.waitFor(() => read().state === 'ended', 'resumed result read under original App ID');
+    await host.waitFor(() => read().state === 'done' && read().read === true, 'resumed result read under original App ID');
     console.log('  ok changed runtime ID resumes original task, survives restart, and preserves actual completion and read state');
     assert.equal(host.errors.length, 0, JSON.stringify(host.errors));
     await host.screenshot(path.join(host.paths.artifacts, 'codex-state-panel.png'));

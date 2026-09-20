@@ -42,7 +42,7 @@ const { start } = require('./hidden-host');
     await host.waitFor(async () => (await rows()).length === 6, 'all fixture rows visible');
     for (const id of [...ids, control]) {
       const row = (await rows()).find(r => r.id === id);
-      assert.equal(row.state, 'error', 'dead process + stale real state derives interrupted');
+      assert.equal(row.state, 'sync-paused', 'dead process + stale real state derives interrupted');
       assert.equal(row.dismissible, true, 'prove the click path exists');
       assert.equal(row.cursor, 'pointer');
     }
@@ -60,7 +60,7 @@ const { start } = require('./hidden-host');
     await host.restart();
     const restored = await rows();
     assert.deepEqual(restored.filter(r => ids.includes(r.id)), [], 'dismissed interrupted sessions must not return after restarting the host');
-    assert.equal(restored.find(r => r.id === control)?.state, 'error', 'untouched interrupted row survives restart (positive control)');
+    assert.equal(restored.find(r => r.id === control)?.state, 'sync-paused', 'untouched interrupted row survives restart (positive control)');
     assert.equal(restored.find(r => r.id === running)?.state, 'running');
     assert.equal(restored.find(r => r.id === waiting)?.state, 'waiting');
     for (const [file, original] of files) assert.equal(fs.readFileSync(file, 'utf8'), original, 'dismissal does not alter hook state files');

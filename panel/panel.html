@@ -62,8 +62,9 @@ body{
 .summary[hidden]{display:none}
 /* 每个状态段自带圆点，颜色跟随状态（dot 用 currentColor 与文字同色） */
 .summary-part{display:inline-flex;align-items:center;gap:5px;flex-shrink:0}
-.summary-part.is-waiting{color:var(--warning)}
+.summary-part.is-waitingInput,.summary-part.is-waiting{color:var(--warning)}
 .summary-part.is-running{color:var(--primary)}
+.summary-part.is-syncPaused{color:var(--gray)}
 .summary-part.is-done{color:var(--success)}
 .summary-dot{width:6px;height:6px;border-radius:50%;background:currentColor}
 /* 头部图标钮（⚙ 与 ✕ 共用一条规则）。
@@ -141,14 +142,14 @@ body{
 /* 状态色：副行与状态点同一档（DESIGN.md 状态图例） */
 .state-running .subline{color:var(--running-sub)}
 .state-running .dot{background:var(--primary)}
-.state-waiting .subline{color:var(--warning)}
-.state-waiting .dot{background:var(--warning)}
+.state-waiting-input .subline,.state-waiting .subline{color:var(--warning)}
+.state-waiting-input .dot,.state-waiting .dot{background:var(--warning)}
 .state-done .subline{color:var(--success)}
 .state-done .dot{background:var(--success)}
-.state-error .subline{color:var(--danger)}
-.state-error .dot{background:var(--danger)}
-.state-idle .subline{color:var(--gray)}
-.state-idle .dot{background:var(--gray)}
+.state-failed .subline,.state-error .subline{color:var(--danger)}
+.state-failed .dot,.state-error .dot{background:var(--danger)}
+.state-sync-paused .subline,.state-stopped .subline,.state-idle .subline{color:var(--gray)}
+.state-sync-paused .dot,.state-stopped .dot,.state-idle .dot{background:var(--gray)}
 .state-unknown .subline{color:var(--gray)}
 .state-unknown .dot{background:var(--gray)}
 /* 跳转失败：行内错误条，不弹窗不静默（DESIGN.md） */
@@ -407,6 +408,9 @@ body:has(.applauncher[hidden]) .empty{padding-top:75px}
   var CATALOGS = {
     'zh-CN': {
       'panel.title': 'Agent 会话',
+      'panel.summary.waitingInput': "{n} 等待输入",
+      'panel.summary.syncPaused': "{n} 同步暂停",
+      'panel.footer.diagnostics': "有 {n} 份状态记录读取失败",
       'panel.summary.running': '{n} 运行中',
       'panel.summary.waiting': '{n} 等待批准',
       'panel.summary.done': '{n} 已完成',
@@ -424,8 +428,8 @@ body:has(.applauncher[hidden]) .empty{padding-top:75px}
       'empty.uninstall': '移除钩子',
       'settings.title': '设置',
       'settings.ipc.label': 'Codex App 实时增强',
-      'settings.ipc.desc': '连接 Codex App 的本地接口，实时显示 App 里的任务并感知跟随状态。接口无官方稳定性承诺，出问题会自动停用并退回钩子通道。',
-      'settings.ipc.ready': '已连接',
+      'settings.ipc.desc': "读取本地任务动态与回合结束记录。当前 App 接口不提供批准等待状态；无新活动时会显示同步暂停，可点击任务回 App 确认。",
+      'settings.ipc.ready': "已连接 · 批准等待检测暂不可用",
       'settings.ipc.connecting': '未连接（等待 Codex App）',
       'settings.ipc.disabled': '已自动停用（协议异常，退回钩子通道）',
       'settings.ipc.off': '已关闭',
@@ -442,6 +446,9 @@ body:has(.applauncher[hidden]) .empty{padding-top:75px}
     },
     en: {
       'panel.title': 'Agent Sessions',
+      'panel.summary.waitingInput': "{n} need input",
+      'panel.summary.syncPaused': "{n} paused",
+      'panel.footer.diagnostics': "{n} status records could not be read",
       'panel.summary.running': '{n} running',
       'panel.summary.waiting': '{n} waiting',
       'panel.summary.done': '{n} done',
@@ -459,8 +466,8 @@ body:has(.applauncher[hidden]) .empty{padding-top:75px}
       'empty.uninstall': 'Remove hooks',
       'settings.title': 'Settings',
       'settings.ipc.label': 'Codex App live updates',
-      'settings.ipc.desc': 'Connects to the Codex App local interface to show App tasks in real time. The interface has no official stability guarantee; on errors it auto-disables and falls back to hooks.',
-      'settings.ipc.ready': 'Connected',
+      'settings.ipc.desc': "Reads local activity and turn outcomes. The current App interface does not expose approval waits. Without fresh activity, sync pauses; open the task to check.",
+      'settings.ipc.ready': "Connected · approval detection unavailable",
       'settings.ipc.connecting': 'Not connected (waiting for Codex App)',
       'settings.ipc.disabled': 'Auto-disabled (protocol error, fell back to hooks)',
       'settings.ipc.off': 'Off',
@@ -633,7 +640,7 @@ body:has(.applauncher[hidden]) .empty{padding-top:75px}
           : 'settings.ipc.connecting';
     elIpcStatus.textContent = t(key);
     elIpcStatus.className = 'set-status'
-      + (key === 'settings.ipc.ready' ? ' is-ready' : key === 'settings.ipc.disabled' ? ' is-disabled' : '');
+      + (key === 'settings.ipc.ready' || key === 'settings.ipc.disabled' ? ' is-disabled' : '');
   }
 
   // 设置视图里的钩子接入态翻面（与空态 renderInstallState 同一份 installed 状态）
@@ -763,7 +770,7 @@ body:has(.applauncher[hidden]) .empty{padding-top:75px}
   function rowEl(row) {
     var el = document.createElement('div');
     // 状态 class 直接取快照的展示态 —— panel 不推导，推导在 lib/aggregate.js
-    el.className = 'row state-' + row.state + (row.state === 'waiting' ? ' is-waiting' : '') + (row.focused ? ' is-focus' : '');
+    el.className = 'row state-' + row.state + ((row.state === 'waiting' || row.state === 'waiting-input') ? ' is-waiting' : '') + (row.focused ? ' is-focus' : '');
     el.dataset.sessionId = row.sessionId;
     el.dataset.state = row.state;
 
@@ -781,6 +788,7 @@ body:has(.applauncher[hidden]) .empty{padding-top:75px}
     var sub = document.createElement('div');
     sub.className = 'subline';
     sub.textContent = row.subline || '';
+    sub.title = sub.textContent;
     main.appendChild(project);
     main.appendChild(sub);
     el.appendChild(main);
@@ -840,15 +848,19 @@ body:has(.applauncher[hidden]) .empty{padding-top:75px}
     // 用户会以为插件坏了。没有隐藏时不平白多一句话。
     var hidden = Number(summary.hiddenNoTarget) || 0;
     var note = $('hidden-note');
-    note.hidden = hidden === 0;
-    note.textContent = hidden > 0 ? t('panel.footer.hidden', { n: hidden }) : '';
+    var diagnostics = Number(summary.diagnostics) || 0;
+    note.hidden = hidden === 0 && diagnostics === 0;
+    note.textContent = [hidden > 0 ? t('panel.footer.hidden', { n: hidden }) : '',
+      diagnostics > 0 ? t('panel.footer.diagnostics', { n: diagnostics }) : ''].filter(Boolean).join(' · ');
 
     // 汇总胶囊：最多同屏两个状态段，优先级 waiting > running > done ——
     // 与徽标（lib/badge.js#segmentsFor）同一条取舍规则，两处显示的内容一致。
     // ⚠️ 2026-09-11 真机缺陷：原来只显示 running，「2 运行中 + 2 已完成」时已完成不见踪影。
     var summaryParts = [
       ['waiting', Number(summary.waiting) || 0],
+      ['waitingInput', Number(summary.waitingInput) || 0],
       ['running', Number(summary.running) || 0],
+      ['syncPaused', Number(summary.syncPaused) || 0],
       ['done', Number(summary.done) || 0]
     ].filter(function (p) { return p[1] > 0; }).slice(0, 2);
     elSummary.hidden = summaryParts.length === 0;

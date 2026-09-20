@@ -57,13 +57,13 @@ function readOnly(dir) {
 
 // ---- 1. PROTOCOL.md 映射表逐行 ----
 const MAPPING = [
-  ['session-start.json', 'SessionStart', 'running'],
+  ['session-start.json', 'SessionStart', 'idle'],
   ['user-prompt-submit.json', 'UserPromptSubmit', 'running'],
   ['pre-tool-use.json', 'PreToolUse', 'running'],
   ['post-tool-use.json', 'PostToolUse', 'running'],
   ['notification-permission.json', 'Notification', 'waiting'],
   ['stop.json', 'Stop', 'done'],
-  ['session-end.json', 'SessionEnd', 'ended']
+  ['session-end.json', 'SessionEnd', 'stopped']
 ];
 
 for (const [fixture, event, state] of MAPPING) {
@@ -95,7 +95,7 @@ test('落盘记录字段齐全且符合 PROTOCOL.md schema:1', () => {
   runFixture('user-prompt-submit.json', dir);
   const rec = readOnly(dir);
 
-  assert.strictEqual(rec.schema, 2);
+  assert.strictEqual(rec.schema, 3);
   assert.strictEqual(rec.agent, 'claude-code');
   assert.strictEqual(rec.sessionId, fx.session_id);
   assert.strictEqual(rec.cwd, fx.cwd);
@@ -111,7 +111,7 @@ test('落盘记录字段齐全且符合 PROTOCOL.md schema:1', () => {
   }
   // 未在协议里的字段不许乱写（会话正文除 title 让步边界外不许采集）
   const extra = Object.keys(rec).filter((k) => ![
-    'schema', 'agent', 'sessionId', 'cwd', 'project', 'tty', 'pid', 'state', 'lastEvent', 'ts', 'threadId', 'source', 'title', 'since'
+    'schema', 'agent', 'sessionId', 'cwd', 'project', 'tty', 'pid', 'state', 'lastEvent', 'ts', 'threadId', 'source', 'title', 'since', 'runId', 'read'
   ].includes(k));
   assert.deepStrictEqual(extra, [], `写入了协议外字段: ${extra.join(',')}`);
   // US-9 显式反转了「零 prompt 内容」：标题 = prompt 首行（64 码点截断）是唯一让步，
@@ -311,7 +311,7 @@ test('闲置提醒 Notification（matcher=idle_prompt）→ 不再是 waiting', 
   assert.strictEqual(res.status, 0);
   const rec = readOnly(dir);
   assert.notStrictEqual(rec.state, 'waiting', '闲置提醒不该显示成「等待你批准」');
-  assert.strictEqual(rec.state, 'running', '会话还活着、只是在等用户说话');
+  assert.strictEqual(rec.state, 'idle', '闲置提醒不是运行证据');
 });
 
 test('闲置提醒：没有 matcher 时靠 message 文本兜底', () => {
@@ -321,7 +321,7 @@ test('闲置提醒：没有 matcher 时靠 message 文本兜底', () => {
     hook_event_name: 'Notification',
     message: 'Claude is waiting for your input'
   }), dir);
-  assert.strictEqual(readOnly(dir).state, 'running');
+  assert.strictEqual(readOnly(dir).state, 'idle');
 });
 
 test('权限请求 Notification 仍然是 waiting（本插件的存在理由，不许误伤）', () => {
@@ -335,25 +335,25 @@ test('权限请求 Notification 仍然是 waiting（本插件的存在理由，�
   assert.strictEqual(readOnly(dir).state, 'waiting');
 });
 
-test('方向性保守：message/matcher 都缺席的 Notification 仍按 waiting', () => {
+test('缺少语义的 Notification 不创建批准等待', () => {
   // 宁可多报一次等待，也不能把真在等批准的会话说成在跑——那会让用户错过批准。
   const dir = tmp();
   const base = fixtureOf('session-start.json');
   runHook(Object.assign({}, base, { hook_event_name: 'Notification' }), dir);
-  assert.strictEqual(readOnly(dir).state, 'waiting', '拿不准必须保守报 waiting');
+  assert.deepStrictEqual(fs.readdirSync(dir), [], '未知通知不制造批准等待');
 });
 
-test('陌生措辞的 Notification 也按 waiting（不做反向猜测）', () => {
+test('陌生措辞的 Notification 不猜测批准', () => {
   const dir = tmp();
   const base = fixtureOf('session-start.json');
   runHook(Object.assign({}, base, {
     hook_event_name: 'Notification',
     message: 'Some future notification wording we have never seen'
   }), dir);
-  assert.strictEqual(readOnly(dir).state, 'waiting');
+  assert.deepStrictEqual(fs.readdirSync(dir), []);
 });
 
-test('compact 恢复（SessionStart source=compact）把陈旧 waiting 清回 running', () => {
+test('compact 发现事件保留已有执行事实', () => {
   // 用户那条路径的完整重放：先真批准（waiting），再 compact 恢复。
   const dir = tmp();
   const base = fixtureOf('session-start.json');
@@ -367,8 +367,8 @@ test('compact 恢复（SessionStart source=compact）把陈旧 waiting 清回 ru
   const res = runFixture('session-start-compact.json', dir);
   assert.strictEqual(res.status, 0);
   const rec = readOnly(dir);
-  assert.strictEqual(rec.state, 'running', 'compact 恢复后不该还挂着「等待你批准」');
-  assert.strictEqual(rec.lastEvent, 'SessionStart');
+  assert.strictEqual(rec.state, 'waiting', '发现事件不能覆盖最后确认的执行状态');
+  assert.strictEqual(rec.lastEvent, 'Notification');
 });
 
 // ---- 真机缺陷回归（2026-09-12）：Claude Desktop App 的空会话不许报「已完成」----
@@ -387,7 +387,7 @@ test('SessionStart→SessionEnd 的空会话：不留「已完成」行，状态
   const dir = tmp();
   const start = fixtureOf('session-start.json');
   runFixture('session-start.json', dir);
-  assert.strictEqual(readOnly(dir).state, 'running', '前置：SessionStart 该先落 running');
+  assert.strictEqual(readOnly(dir).state, 'idle', '发现会话不应计入运行');
   const end = Object.assign({}, fixtureOf('session-end.json'), {
     session_id: start.session_id, cwd: start.cwd
   });
@@ -397,7 +397,7 @@ test('SessionStart→SessionEnd 的空会话：不留「已完成」行，状态
     '空会话该被清除，绝不留一条绿色「已完成」（误报完成）');
 });
 
-test('干过活的会话正常收尾：SessionEnd 照常落 ended（清除只针对空会话）', () => {
+test('干过活的会话正常收尾：SessionEnd 没有成功证据时落 stopped（清除只针对空会话）', () => {
   const dir = tmp();
   const start = fixtureOf('session-start.json');
   runFixture('session-start.json', dir);
@@ -410,14 +410,14 @@ test('干过活的会话正常收尾：SessionEnd 照常落 ended（清除只针
   });
   runHook(end, dir);
   const rec = readOnly(dir);
-  assert.strictEqual(rec.state, 'ended', '提过问的会话结束时必须留 ended 行');
+  assert.strictEqual(rec.state, 'stopped', '提过问的会话结束时必须留 ended 行');
   assert.strictEqual(rec.lastEvent, 'SessionEnd');
 });
 
-test('拿不到前一条记录时不做推断：孤立的 SessionEnd 照旧落 ended', () => {
+test('拿不到前一条记录时不做推断：孤立的 SessionEnd 只报告停止', () => {
   const dir = tmp();
   runFixture('session-end.json', dir);
-  assert.strictEqual(readOnly(dir).state, 'ended',
+  assert.strictEqual(readOnly(dir).state, 'stopped',
     'hook 中途才装 / 目录被清过时，没有证据说明它是空会话——保守写 ended');
 });
 

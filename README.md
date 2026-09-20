@@ -21,6 +21,7 @@
 
 | 能力 | 用途 | 范围 |
 |---|---|---|
+| `crypto.randomUUID` | 为没有上游回合编号的 hook 生成本地执行编号 | 不采集随机数以外的数据 |
 | `fs` 读写 `~/.local/state/pet-agent-status/` | 读取会话状态文件（本插件 hooks 自己写入的数据） | 仅该目录 |
 | `fs` 读写 `~/.claude/settings.json`、`~/.codex/hooks.json` | 「一键接入/移除钩子」时合并写入 hooks 条目，写前自动备份 | 仅接入/卸载动作时；不碰 Codex 的 `hooks.state` 信任文件 |
 | `child_process` spawn `ps` | 按会话的 tty 反查它属于哪个终端 App（决定这一行能否跳转） | 只读进程表，10 秒缓存 |
@@ -33,7 +34,7 @@
 | `fs`/`node:sqlite` **只读** `~/.codex/sqlite/codex-dev.db`、`~/.codex/session_index.jsonl` | 会话行显示 Codex 自己生成的线程标题 | 只读，30s 缓存；读不到自动降级为目录名 |
 | `fs`/`node:sqlite` **只读** `~/.workbuddy/workbuddy.db`（+ `~/.workbuddy/sessions/` 心跳文件） | WorkBuddy 会话状态与标题（官方权威状态就在该表，实测见 `fixtures/workbuddy-facts.md`） | 每 2s 只读轮询；锁死/没装/驱动缺失一律静默降级 |
 
-另使用宿主 SDK：`storage`（实验开关与会话已读记录持久化，仅存会话 ID 和已读时刻）`pet`（bubble/playAnim/speak）`pet.badge`
+另使用宿主 SDK：`storage`（实验开关、按执行代次的已读/收起及提醒记录、有界诊断记录，仅存 ID、状态、来源事件和时间）`pet`（bubble/playAnim/speak）`pet.badge`
 （宠物脚下折叠徽标，需宿主 ≥0.19.0，老宿主自动降级）`ui`（面板开关）`events` `scheduler`。
 
 ### Codex App 实时增强（默认开，实验；面板 ⚙ 设置里可关）
@@ -72,3 +73,11 @@ older plugin installations must first be manually updated to a version with this
 ## License
 
 MIT
+
+### 状态可靠性（schema:3）
+
+App 已跟踪回合的完成由本地元数据核验，不依赖完成通知。失败、停止、等待输入分别展示；已读独立于执行结果。同步暂停保留最后确认的事实，不计入运行或成功。
+
+**当前 Codex App 的批准等待检测仍不可用**：已验证的被动 IPC 和本地回合库均不提供待批准请求。设置页明确披露；插件不启动另一个 App Server 冒充当前实例、不订阅会话正文，也不自动批准。长时间无输出且无实时运行确认时会显示同步暂停。
+
+升级写 schema:3，兼容读 schema:1/2。旧版本不能读取新状态；回退前应备份状态目录并同时回退 hooks 写入器，由真实事件重新采集，不能把新状态转为“已完成”。详细契约见 PROTOCOL.md。

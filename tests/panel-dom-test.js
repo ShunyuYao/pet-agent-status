@@ -397,7 +397,7 @@ test('5 行快照：行数 / waiting 置顶且带描边 class / 各行状态 cla
   // 快照里必须真有这五种态，否则下面的断言是空转
   assert.deepStrictEqual(
     snap.rows.map((r) => r.state).sort(),
-    ['done', 'error', 'running', 'running', 'waiting']
+    ['done', 'running', 'running', 'sync-paused', 'waiting']
   );
 
   const p = mountPanel();
@@ -481,12 +481,9 @@ test('副行文案与颜色 class 跟随状态（含 unknown 不显示为完成�
   assert.strictEqual(byId.w.querySelector('.subline').textContent, t('state.waiting'));
   assert.ok(byId.w.classList.contains('state-waiting'));
 
-  const unknown = byId.broken;
-  assert.ok(unknown, '损坏文件应有一行 unknown');
-  assert.ok(unknown.classList.contains('state-unknown'));
-  assert.strictEqual(unknown.querySelector('.subline').textContent, t('state.unknown'));
-  assert.notStrictEqual(unknown.querySelector('.subline').textContent, t('state.done'),
-    'unknown 绝不能显示为已完成');
+  assert.strictEqual(byId.broken, undefined);
+  assert.strictEqual(p.$('#hidden-note').hidden, false);
+  assert.strictEqual(p.$('#hidden-note').textContent, t('panel.footer.diagnostics', {n:1}));
   p.close();
 });
 
@@ -668,7 +665,7 @@ test('canDismiss 行即使不能跳转也可点：点击发 jump 意图', () => 
     rec({ sessionId: 'run', state: 'running', ts: T0 - 5000 })
   ], { isPidAlive: (pid) => pid !== 999999, canJump: () => false });
   const byId = Object.fromEntries(snap.rows.map((r) => [r.sessionId, r]));
-  assert.strictEqual(byId.err.state, 'error', '前置：应有 error 行');
+  assert.strictEqual(byId.err.state, 'sync-paused', '前置：应有 error 行');
   assert.strictEqual(byId.err.canJump, false, '前置：终端归属判不出');
   assert.strictEqual(byId.err.canDismiss, true, '前置：行带 canDismiss 标志');
 
@@ -986,8 +983,8 @@ test('IPC 开关默认勾选；settings-state 到达后以 tool 为准并显示�
   const p = mountPanel();
   assert.strictEqual(p.$('#ipc-toggle').checked, true, '默认开');
   p.push('agent-status:settings-state', { codexIpcEnabled: true, ipcState: 'ready' });
-  assert.strictEqual(p.$('#ipc-status').textContent, '已连接');
-  assert.ok(p.$('#ipc-status').classList.contains('is-ready'));
+  assert.strictEqual(p.$('#ipc-status').textContent, t('settings.ipc.ready'));
+  assert.ok(p.$('#ipc-status').classList.contains('is-disabled'));
   p.push('agent-status:settings-state', { codexIpcEnabled: true, ipcState: 'disabled' });
   assert.ok(p.$('#ipc-status').classList.contains('is-disabled'), '停用态要橙色警示');
   p.push('agent-status:settings-state', { codexIpcEnabled: false, ipcState: 'off' });

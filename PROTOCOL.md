@@ -1,34 +1,55 @@
-# 状态文件协议 schema:2（冻结）
+# 状态文件协议 schema:3（兼容读取 schema:1/2）
 
 > 改协议 = 升 `schema` 并保持向后兼容读取；先改本文件再改代码。
+
+## schema:3 状态可靠性规则（2026-09-20）
+
+以下规则为当前协议；旧版本记录只做兼容读取，不据旧语义补推成功。
+
+- 新写入 schema:3，读取接受 1/2/3。除原字段外允许 `read`（boolean）、`runId`（本地 UUID 执行代次）。`turnId` 仍只写来源提供的真实回合 UUID。
+- 新增原始态 `idle`（无执行）、`failed`（明确失败）、`stopped`（明确取消/退出）、`waiting-input`（明确等待用户输入）。`done` 指本轮正常结束，不表示用户整个目标完成。
+- `SessionStart` 只写 idle；已有记录时不覆盖执行或结果。闲置 Notification 不续运行心跳；只有明确、可归属的新事件才改变当前执行。`SessionEnd` 写 stopped（空会话仍删除）；明确 Stop 写 done。
+- `UserPromptSubmit` 开始新的本地 runId；该代次在工具、等待和结束事件间保持。App 优先以 turnId 为代次，WorkBuddy 以新活动段创建 runId。已读和心跳不能改变代次。同轮已读单调保持；迟到的 hasUnreadTurn:true 不撤销已读。
+- Codex App 周期核对所有已跟踪 App 记录：当前记录的同回合明确 completed 时主动落 done，不要求先收到 IPC。明确 failed/interrupted 分别落 failed/stopped；结果映射的来源证据在 fixtures 中单独记录。
+- 不为未曾跟踪的历史回合补建完成行；不同回合的终态不能结束当前回合。没有 turnId 的旧记录仅在起止时间能覆盖旧记录活动段时允许补正。
+- 已读通知只更新 read，且只关联已经确认结束的同回合；不得给运行回合预先标记已读。通知不带回合 ID，不能强行归给通知到达时正在执行的回合。
+- 同回合终态不能被 rollout 活动、队列变化、旧数据库投影复活；不同且明确开始的新回合才恢复运行。
+- `ts` 表示状态证据更新时间；仅更新 read 保留 ts/since/runId/turnId。磁盘读取时间不当作状态证据时间。
+- 陈旧运行不再推导 unknown/idle/完成，改为快照的 `sync-paused`，保留原始状态与最后证据时间，不计入运行/等待/完成，不触发完成气泡，不因 idle 超时消失。坏文件只形成诊断计数，不伪造会话行。
+- 已确认 done/failed/stopped 的事实不因展示驻留时间改变；驻留后可移除展示。legacy ended 只表示结束，不推断正常成功。
+- App 等待批准通道尚未在当前安装版验证可达。只读被动 IPC 不处理未经验证的批准消息，也不以文件停更猜等待；设置必须披露能力限制。
+- 旧读者不支持 schema:3。回退插件需同时回退 hooks 写入器并备份/移走 schema:3 状态目录，由真实来源重新采集；不把新状态有损转为 done。用户数据不自动删除。
 
 ## 目录与文件
 
 - 目录：`~/.local/state/pet-agent-status/`（测试用 `PET_AGENT_STATUS_DIR` 覆盖）。
 - 每个会话一个文件：`<sessionId>.json`。`sessionId` 只允许 `[A-Za-z0-9._-]`，其余字符写入前替换为 `_`（防路径穿越）。
 - **写入必须原子**：同目录写临时文件（`.tmp-` 前缀）后 `rename` 覆盖。
-- 会话正常结束（SessionEnd/退出）：hook 把 `state` 置 `ended` 并保留文件；采集器把 `ended` 视为 done 的终态展示后按 idle 淡出规则移除展示（文件由采集器在超过 24h 后清理）。
+- 同会话写入经 `.json.lock` 串行，再原子 rename。锁等待最长 1 秒；确认锁持有进程不存在才清除遗留锁。超时写入失败由 hook 静默处理。
+- SessionEnd 不覆盖已有 done/failed/stopped 结果。没有已确认结果时为 stopped。终态展示 25 分钟后移除，磁盘记录保留作为重启屏障。插件不自动删除历史文件。
 
-## 字段（schema:2；兼容读取 schema:1）
+## 字段（schema:3；兼容读取 schema:1/2）
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `schema` | number | 是 | 新写入恒 `2`；读取接受 `1`、`2` |
+| `schema` | number | 是 | 新写入恒 `3`；读取接受 `1`、`2`、`3` |
 | `agent` | `'claude-code'`\|`'codex'`\|`'workbuddy'` | 是 | 会话来源厂牌（`'workbuddy'` 为 2026-09-12 加法，旧读者对未知厂牌按损坏跳过——可接受：旧版本插件本就不会有 workbuddy 写入方） |
 | `sessionId` | string | 是 | 会话唯一 id（Claude Code 用 hook 输入的 `session_id`） |
 | `cwd` | string | 是 | 会话工作目录（绝对路径） |
 | `project` | string | 是 | 展示名：`basename(cwd)` |
 | `tty` | string\|null | 是 | 会话终端 tty（如 `/dev/ttys004`），拿不到为 null |
-| `pid` | number\|null | 是 | agent 进程 pid（error 推导做存活探测），拿不到为 null |
-| `state` | string | 是 | `running`\|`waiting`\|`done`\|`ended`（推导态 error/idle/unknown 只在采集器内存与面板，不落盘） |
+| `pid` | number\|null | 是 | agent 进程 pid（同步有效性探测），拿不到为 null |
+| `state` | string | 是 | `idle`\|`running`\|`waiting`\|`waiting-input`\|`done`\|`failed`\|`stopped`；兼容读取 `ended`，不推断成功 |
 | `lastEvent` | string | 是 | 产生本次写入的原始事件名（如 `UserPromptSubmit`/`Notification`/`Stop`） |
-| `ts` | number | 是 | 本次写入的 Unix 毫秒 |
+| `ts` | number | 是 | 最后状态证据时间（Unix 毫秒），已读变化不刷新 |
+| `runId` | string | 否 | 本地执行 UUID；新写入生成，无上游编号时以 UserPromptSubmit 或新的活动段创建，心跳不重置。 |
+| `read` | boolean | 否 | 结果是否已读；不改变执行结果、时间或回合编号。 |
 | `turnId` | string | 否 | schema:2 新增：Codex App 当前回合 UUID。用于完成屏障与重启恢复；CLI/hook 不必写。旧记录无此字段时，新回合开始时间必须严格晚于旧记录 `ts` 才可从终态恢复运行。 |
 | `threadId` | string | 否 | Codex 线程 id（UUID，供 `codex://threads/<id>` 深链接） |
 | `source` | `'hook'`\|`'ipc'`\|`'reconcile'`\|`'poll'` | 否 | 数据来源，hook 写入缺省为 `'hook'`；`'poll'` = WorkBuddy SQLite 轮询（2026-09-12 加法） |
 | `form` | `'cli'`\|`'app'` | 否 | 会话形态；缺省按 `'cli'` 读。`'app'` = Codex App 任务（2026-09-11 起由 IPC 摄入写入；最早作为 schema:1 的选填字段引入，schema:2 继续保留） |
 | `title` | string | 否 | 会话标题兜底（US-9，schema:1 加法）。hook 在 `UserPromptSubmit` 时取 `prompt` **首个非空行、64 码点截断**写入；**首见定名**——同会话后续写入保留既有 title，不随后续 prompt 改名。这是「不采集会话正文」纪律的显式让步，边界即上述两条：只许首行 + 截断，任何路径都不许落完整 prompt。展示层优先级：Codex 线程目录 AI 标题 > 终端标签标题（两者均采集器现查、不落盘，见 fixtures/terminal-titles-facts.md）> 本字段 > `project` |
-| `since` | number | 否 | **活跃段起点**（Unix 毫秒）：本会话这一轮进入活跃组（`running`/`waiting`）的时刻。由 `writeStatus` 维护：前一记录也在活跃组且没有明确切换 turnId 则继承（工具调用、批准后恢复都不重置；明确的新回合重新计时），否则等于本次 `ts`。面板 `mm:ss` 计时用它；陈旧/error/idle 推导仍用 `ts`（最后心跳）。缺省读者回退 `ts`（schema:1 加法，2026-09-11 修「工具调用把计时归零」缺陷时引入） |
+| `since` | number | 否 | **活跃段起点**（Unix 毫秒）：本会话这一轮进入活跃组（`running`/`waiting`/`waiting-input`）的时刻。由 `writeStatus` 维护：前一记录也在活跃组且没有明确切换 turnId 则继承（工具调用、批准后恢复都不重置；明确的新回合重新计时），否则等于本次 `ts`。面板 `mm:ss` 计时用它；同步新鲜度判断仍用 `ts`（最后心跳）。缺省读者回退 `ts`（schema:1 加法，2026-09-11 修「工具调用把计时归零」缺陷时引入） |
 
 未知字段读取时忽略不报错；缺必填字段的文件按损坏跳过（不 crash 采集器）。
 
@@ -36,13 +57,14 @@
 
 | Claude Code hook 事件 | 写入 state |
 |---|---|
-| `SessionStart` | `running` |
+| `SessionStart` | `idle` |
 | `UserPromptSubmit` | `running` |
 | `PreToolUse` / `PostToolUse` | `running` |
 | `Notification` **且是权限请求** | `waiting` |
-| `Notification` **且是闲置提醒**（`matcher:'idle_prompt'`，或 message 含「waiting for your input」） | `running` |
+| `Notification` **且是闲置提醒**（`matcher:'idle_prompt'`，或 message 含「waiting for your input」） | `idle`（已有记录不覆盖、不刷新心跳） |
+| `Notification` 无明确权限/闲置语义 | 忽略，不猜等待批准 |
 | `Stop` | `done` |
-| `SessionEnd` | `ended`（**空会话例外**：前一条记录仍停在 `SessionStart` 时删除状态文件，见下） |
+| `SessionEnd` | `stopped`（**空会话例外**：前一条记录仍停在 `SessionStart` 时删除状态文件，见下） |
 
 **别的 agent 起的子进程会话一个字节都不落盘**（2026-09-12 用户需求，实录
 `fixtures/nested-session-facts.md`）：判据是**进程祖先链上除自己这个 claude 外还有第二个
@@ -59,17 +81,14 @@ claude**（`lib/nested-session.js`）。这类会话（`claude -p …` 跑在某
 照常写 `ended` 会让面板显示绿色「已完成」、计进汇总胶囊与徽标、宠物还为它喊一声，
 而它什么都没干——这是**误报完成**。判据方向性保守：只有能证明「一步都没往前走」
 （已有 `source:'hook'` 记录且 `lastEvent === 'SessionStart'`）才删；拿不到前一条记录
-（hook 中途才装、目录被清过）时不做推断，照旧写 `ended`。
+（hook 中途才装、目录被清过）时不做推断，写 `stopped`。
 
 **`Notification` 必须按语义分流，不许一律当 `waiting`**（2026-09-11 真机缺陷，
 实录根因见 `fixtures/waiting-accuracy-facts.md`）：它是通用通知事件，官方 matcher 至少有
 `permission_prompt`（真在等批准）与 `idle_prompt`（闲置约 60s，语义是「等你说话」）两类。
 把闲置提醒也写成 `waiting`，面板就会对一个只是没人理的会话显示「等待你批准」。
 
-判别优先级：先认结构化的 `matcher`/`notification_type`，缺席才退回 `message` 文本启发式。
-**方向性必须保守——拿不准一律按 `waiting`**：漏报会让用户错过真正在等他批准的会话
-（那正是本插件存在的理由），误报只是多看一眼。故只在**确认是闲置类**时才降级，
-绝不反向猜测。官方未公布逐字 message 字符串，所以文本判据只能是兜底而非主判据。
+判别优先级：先认结构化 `matcher`/`notification_type`。只认 `permission_prompt` 为批准等待，`idle_prompt` 为闲置；陌生类型忽略。没有类型时只匹配已知权限请求或闲置措辞，未知措辞不猜。
 
 Codex CLI 事件映射（US-006 按本机实测事实补全，来源 `fixtures/codex-hooks-facts.md`：
 codex-cli 0.153.4 实测。证据分级：【实录】= 真实会话抓到 payload；【二进制确认】= CLI 二进制
@@ -77,12 +96,12 @@ wire 结构里确认事件存在但未实录，按同名 Claude Code 行映射�
 
 | Codex CLI hook 事件 | 写入 state | 证据 |
 |---|---|---|
-| `SessionStart` | `running` | 实录 |
+| `SessionStart` | `idle` | 实录 |
 | `UserPromptSubmit` | `running` | 实录 |
 | `PreToolUse` / `PostToolUse` | `running` | 二进制确认 |
 | `PermissionRequest`（权限等待，对应 Claude Code 的 `Notification`） | `waiting` | 二进制确认 |
 | `Stop` | `done` | 实录 |
-| `SessionEnd` | `ended` | 实录 |
+| `SessionEnd` | `stopped` | 实录 |
 
 Codex 侧附加约定：
 
@@ -92,12 +111,15 @@ Codex 侧附加约定：
 - Codex 未在上表的事件（`PreCompact`/`PostCompact`/`SubagentStart`/`SubagentStop`/`Interrupt` 等
   二进制里存在但语义待实录）一律按未知事件忽略退出 0，不猜测映射。
 
-## 采集器推导态（不落盘）
+## 采集器展示与同步健康（不落盘）
 
-- `error`：文件 state 为 `running`/`waiting` 且 `ts` 距今 > 60s 且 `pid` 非 null 且进程不存活。
-- `done`（展示驻留）：state 为 `done`/`ended` 且 `ts` 距今 ≤ 5min，按「已完成」绿展示（2026-09-10 修订，对齐 DESIGN.md 图例）。
-- `idle`：done/ended 超 5min 驻留窗，或任何状态 `ts` 距今 > 20min；idle 超 20min 从面板移除。
-- `unknown`：文件损坏/schema 高于当前支持版本/来源语义不明。**绝不映射为 done**。
+- `idle` 不产生执行行。done/failed/stopped 事实不会随时间变成 idle；25 分钟后移除展示。
+- 活跃记录超过 3 分钟没有证据，或超过 60 秒且已确认进程不存在，显示 `sync-paused`；raw 保留最后状态、ts 保留最后证据时间。同步暂停不计运行、等待或完成，不因超时自动消失，用户可点击确认并收起；新活动可重新显示。
+- 读取异常只形成 diagnostics。已在本次运行中读到过的记录暂时损坏时保留最后记录，活跃状态显示同步暂停；首次读到坏文件不伪造任务。没有会话时目录尚未创建是正常情况。
+- 旧 `ended` 一律表示停止，不推成功。旧记录缺 runId/read 仍可读取，不自动改写历史文件。
+- summary.done 仅计 5 分钟内、未读的正常完成；failed/stopped 不计。summary.syncPaused/waitingInput 分别统计同步暂停和等待输入，面板、启动器、徽标共享行集合。
+- 宠物以会话+回合/执行代次识别迁移。首次看到历史 done 不补报；同轮 done 不重复提醒，新轮不受旧轮 5 分钟节流影响。提醒元数据经宿主 storage 保存 30 天，等待提醒仍以 5 分钟节流。
+- 点击收起独立于执行结果；storage 保存 at/runId/ts，同轮终态的重复写入不重新出现，新轮立即解除收起。同步暂停行恢复新证据后可重新出现。兼容旧的数值时间戳记录，不删除原状态文件。
 
 ## Codex App 来源（US-8，source:'ipc'）
 
@@ -108,18 +130,16 @@ App 任务与 CLI 会话在协议上同构，差别有三处：
 - `form: 'app'`；`sessionId` = `conversationId`（UUID）本身，`cwd` 为空串、`project` 为品牌名
   `Codex App`（IPC 广播不携带工作目录，不猜、不从别的消息里凑）。
 
-### IPC 事件 → state 映射（2026-09-11 实录，来源 `fixtures/codex-ipc-facts.md` §4/§8）
+### IPC 事件 → state 映射
 
-| IPC 广播 | 写入 state | 语义依据 |
-|---|---|---|
-| `thread-queued-followups-changed`（带 `conversationId`） | `running` | ⚠️ 2026-09-11 第四轮实测反证（facts §10.1）：**普通提交时刻不发**，不可当 running 的主依据；映射保留（真发了仍是活动证据），running 的主信号改为 rollout 活动（见下节） |
-| `thread-read-state-changed` 且 `hasUnreadTurn === true` | 回合核验后 `done` | 回合结束的未读信号，但不携带 turnId；排队续聊时可与新回合运行重叠（facts §12）。最新回合仍在运行时暂存通知，不写终态。**这是唯一允许映射为 done 的 IPC 信号** |
-| `thread-read-state-changed` 且 `hasUnreadTurn === false` | `ended`（仅更新已存在的摄入系记录，绝不新建；**该线程 rollout 活动新鲜时跳过**） | 用户在 App 里读过了 = 已结束展示；对没见过的会话新建一条 `ended` 是在报旧闻。实测（facts §10.1）提交时刻 App 会发一条 false（用户正看着线程），若不带活动豁免会把刚开跑的任务当场翻成已结束 |
-| `thread-stream-following-changed` | 不落盘 | 只进内存 following 集合，供聚焦（focus）同级优先 |
-| 其余（含 `thread-stream-state-changed`） | 忽略 | 实录证实被动外部 client **收不到** stream-state 广播（facts §8）；未实录语义一律不猜 |
+| IPC 广播 | 行为 |
+|---|---|
+| `thread-queued-followups-changed` | 只有最新回合明确 inProgress 才记录活动；终态队列清理不能复活旧任务。普通提交不保证发此帧。 |
+| `thread-read-state-changed` | 先核验同轮结果；只有已结束的同轮记录才更新 read。运行期间的通知不预先标记新轮已读，不为陌生历史任务创建完成行。 |
+| `thread-stream-following-changed` | 不落盘；只用于 App 归属和同级聚焦。 |
+| 其余 | 忽略，尤其不假设被动 client 能收到 `thread-stream-state-changed`。 |
 
-摄入保护：同 `sessionId` 已存在 `source` 非 `'ipc'` 的记录（CLI hooks 写的，含 tty 更富）时，
-IPC 摄入**跳过不覆盖**。IPC 记录的清理走既有 idle 淡出与 24h 文件清理，无独立生命周期。
+ipc/reconcile 属于同一 App 摄入来源，可互相更新；不得覆盖 hook 记录。
 
 ### rollout 活动与回合屏障（source:'reconcile'，2026-09-12 修订）
 
@@ -131,7 +151,7 @@ spawn 父子关系，均证明该线程是内部子 Agent（包括 review/compac
 面板、计数、聚焦、App 完成点、徽标或宠物联动。父任务仍按自身事件显示。
 关闭 IPC 增强后，历史记录仍执行该过滤；不删除历史文件，沿用既有过期清理。
 
-身份只存在采集器内存，不新增或改变状态文件字段（仍写 schema:2，兼容读 schema:1）。
+身份只存在采集器内存，不新增或改变状态文件字段（写 schema:3，兼容读 schema:1/2）。
 只缓存已经确认的子 Agent；查不到、缺列、锁库、未知来源均不猜，后续采集重试。
 元数据延迟时可能短暂沿用原显示，确认后即排除；已确认身份在本次运行内不因数据库
 短暂失效而回退。重启后重新核验。不得以标题、目录缺席、普通 fork 信息或未知来源
@@ -147,22 +167,17 @@ spawn 父子关系，均证明该线程是内部子 Agent（包括 review/compac
   解析此对应关系：以运行线程 ID 查询回合，面板、IPC、状态文件与跳转仍保留 App
   线程 ID。近期文件发现也取下划线前的 App ID，不额外创建内部运行线程行。
   不混用旧 App ID 下的终态回合；找不到运行线程元数据时沿用既有缺失元数据保护。
-  仅调整内部元数据关联，状态文件字段及含义不变，仍为 schema:2。
-- 收到 IPC 完成事件时，已知最新回合为 `inProgress` 或未知状态则先在内存暂存通知
-  与该回合 ID，不得把正在运行的回合直接写成 done。每轮采集核验：同一回合明确为
-  completed/failed/interrupted 后，才落 done（期间收到已读则落 ended）；已进入不同
-  回合则丢弃旧通知。核验不依赖 rollout 新鲜度，数据库暂不可用则继续等待。
-  没有回合元数据且没有待核验通知时，沿用原 IPC 降级路径，不改变文件字段。
-  通知仅在内存保存，关闭增强或停止插件时清除；重启不根据历史数据库补发完成。
-  本修复不改变状态文件格式，仍写 schema:2、兼容读 schema:1。
-- 写入已核验完成记录时保存该回合 `turnId`。已完成/已结束的记录，
+  仅调整内部元数据关联，状态文件字段及含义不变，写 schema:3。
+- 每两秒核对已跟踪 App 任务的最新回合。记录带 turnId 时要求完全相同；旧记录无 turnId 时要求起止时间覆盖其活动段。completed→done、failed→failed、interrupted→stopped。不依赖 IPC 通知，不补建陌生历史结果。
+- 终态 ts 取上游结束时间（不晚于当前时间、也不早于已保存的证据时间），仅更新已读不刷新。
+- 写入已核验完成记录时保存该回合 `turnId`。已完成/失败/停止的记录，
   只有明确的**不同回合**且状态为 `inProgress` 才能由 rollout 恢复 running。
   同一回合收尾写入、mtime 不变、插件重启均不能穿过该屏障。
 - 对 schema:1 或尚无 turnId 的终态记录，需最新 inProgress 回合的 started_at
   严格晚于记录 ts 才允许恢复。数据库缺失/锁住/schema 漂移时保持终态，
-  不凭 mtime 猜新回合；已验证的 IPC 活动事件仍可作为降级来源。
+  不凭 mtime 猜新回合；无回合依据的队列消息不作为新回合来源。
 - 最新回合已经 completed/failed/interrupted 时，不再以 rollout 给 running 续心跳。
-  数据库只用于活动核验，**不把数据库状态映射成 done**；完成仍由已验证的 IPC 事件确认。
+  数据库中同回合终态直接纠正记录；不能将磁盘读取时间当作运行心跳。
 - 归属保护不变：已有 ipc/reconcile 记录或 App following，且不可覆盖 hook 来源。
 - 运行期间 ≥20s 刷新 ts，since 继承规则不变；心跳仅延续运行态。
 - 近期目录用于发现文件；另对已有 App 记录/following 线程，从
@@ -184,7 +199,7 @@ IPC 仍是**可关闭的增强通道**（设置里可关，故障自动停用退
 记录形态：`agent:'workbuddy'`、`form:'app'`、`source:'poll'`、`tty:null`、
 `sessionId` = DB 的会话 UUID、`cwd`/`project` 取自 DB `cwd` 列（真路径，非品牌名兜底）、
 `pid` = WorkBuddy 内嵌 serve 进程 pid（`~/.workbuddy/sessions/<pid>.json` 心跳文件里
-最新鲜的一个；拿不到为 null）——采集器既有的「pid 死亡→error」推导因此免费生效。
+最新鲜的一个；拿不到为 null）——采集器可据此识别同步中断。
 `title` 取 DB `custom_title` > `title`（AI 起的短名，非会话正文），走 `normalizeTitle`
 清洗与「首见定名」；首写时 DB 还没起名则后续写入自然补上。
 
@@ -193,11 +208,11 @@ IPC 仍是**可关闭的增强通道**（设置里可关，故障自动停用退
 | DB status | 写入 state | 附加判据 |
 |---|---|---|
 | `working` / `planning` | `running` | `updated_at` 距今 ≤ 180s（运行期实测 1–5s 一写，180s = 36 倍余量；防 App 被强杀后 status 永远停在 working 的僵尸行） |
-| `pending` 且 `last_activity_at` **非空** | `waiting` | 语义是 awaiting_input（agent 等用户答复）。**新建**该行要求 `updated_at` ≤ 180s（不报旧闻）；已有记录则持续心跳维持 |
+| `pending` 且 `last_activity_at` **非空** | `waiting-input` | 语义是 awaiting_input（agent 等用户答复）。**新建**该行要求 `updated_at` ≤ 180s（不报旧闻）；已有记录则持续心跳维持 |
 | `pending` 且 `last_activity_at` **为空** | 不落盘 | 刚建的空会话（fixtures §5：创建时刻 last_activity_at=None），报 waiting 就是 0.8.2 修掉的那类「闲置误报」 |
 | `completed` | `done`（**只更新已存在的 poll 记录，绝不新建**） | 启动时扫到的历史 completed 是旧闻（同 IPC ended 的只更新规则） |
-| `failed` / `error` | `done`，`lastEvent` 记真实 status（只更新不新建） | 面板无失败态；done 驻留让用户看见后点进去了解结果 |
-| `terminated` / `archived` | `ended`（只更新不新建） | 用户自己取消/归档的，无需驻留提醒 |
+| `failed` / `error` | `failed`（只更新不新建） | 不计成功，不发成功气泡 |
+| `terminated` / `archived` | `stopped`（只更新不新建） | 用户自己取消/归档的，无需驻留提醒 |
 | 其余 / 未知 status | 忽略 | 未实录语义不猜，**绝不映射为 done**（同 IPC 纪律） |
 
 ### 长期约束
@@ -213,7 +228,7 @@ IPC 仍是**可关闭的增强通道**（设置里可关，故障自动停用退
   id 必须过 UUID 校验才拼 URL，同 codex 深链接白名单精神）。判定唯一实现仍在
   `codex-deeplink.js#pickNavigator`（workbuddy 分支）。
 - 内部存储无稳定性承诺（同 Codex rollout 纪律）：schema 变了查询报错 → 静默降级，
-  绝不 crash 采集器；查询只 SELECT 白名单列，`deleted_at IS NULL`，LIMIT 20。
+  绝不 crash 采集器；发现新任务时查询白名单列、`deleted_at IS NULL`、LIMIT 20；每个已跟踪任务再按 ID 查询，终态不会因掉出最近 20 条而漏收。
 - 本来源 v1 无独立开关（没装 WorkBuddy 即自然无行为）；将来要加开关走 storage 键
   `workbuddyEnabled`，别复用 codex 的 `codexIpcEnabled`。
 
@@ -248,7 +263,7 @@ IPC 仍是**可关闭的增强通道**（设置里可关，故障自动停用退
   （冷门终端、ps 缓存抖动），会话真实存在于某个终端里，按它过滤会误藏。tty 非空一律保留。
 - tty 检测的准确性与失准方向见 `fixtures/nested-session-facts.md` §9（三组真机对照）：
   唯一失准是「无终端但祖先有终端时继承父 tty」，方向是多给入口，不会误藏。
-- 坏文件行不受影响（诊断信息）。
+- 坏文件以诊断计数展示，不参与任务数量。
 - `summary` 是 panel/徽标/联动的共同契约，新增字段必须同步 `tests/aggregate-test.js`
   与 `tests/tool-lifecycle-test.js` 里逐字段全等的那两条断言。
 
@@ -264,3 +279,7 @@ IPC 仍是**可关闭的增强通道**（设置里可关，故障自动停用退
 | `PET_AS_CLAUDE_APP_SUPPORT` | Claude Desktop App 数据目录（会话元数据：AI 标题与归属） | `~/Library/Application Support/Claude` |
 | `PET_AS_PS_OUTPUT` | 进程表（子进程会话判定用，测试注入实录 ps 输出） | 实跑 `ps -eo pid=,ppid=,tty=,comm=` |
 | `PET_AS_TTY` | 会话 tty（测试钉死；tty 检测依赖环境，CI 上完全没有 tty） | 由 fd/ps 反查 |
+
+### 有界诊断记录
+
+宿主 storage 的 `statusTransitions` 最多保存最近 100 条、30 天内采集到的状态变化，字段白名单为 sessionId、runId、state、raw、read、at、evidenceAt、source、event、reason。仅记录采集器观察到的快照迁移，不承诺捕获两次采集之间的每个源事件。不保存标题、路径、正文或批准参数；相同状态的心跳不追加记录。重启恢复并去重，写失败在后续采集重试。

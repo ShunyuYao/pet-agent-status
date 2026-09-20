@@ -28,11 +28,11 @@ async function fixture(run) {
       storage: {
         async get(key) {
           if (key === 'codexIpcEnabled') return false;
-          if (options.beforeRead) await options.beforeRead();
+          if (key === 'dismissedSessions' && options.beforeRead) await options.beforeRead();
           return store()[key];
         },
         async set(key, value) {
-          if (options.beforeWrite) await options.beforeWrite(value);
+          if (key === 'dismissedSessions' && options.beforeWrite) await options.beforeWrite(value);
           fs.writeFileSync(storeFile, JSON.stringify({ ...store(), [key]: value }));
         }
       },
@@ -87,6 +87,7 @@ async function fixture(run) {
     }
     files.forEach((file, i) => assert.equal(fs.readFileSync(file, 'utf8'), originals[i]));
     advance(1000);
+    record('a', { ts: 1789000001000, state: 'running', lastEvent: 'UserPromptSubmit' });
     record('a', { ts: 1789000001000, state: 'done', lastEvent: 'Stop' });
     second.poll();
     assert.equal(second.rows().find(row => row.sessionId === 'a').state, 'done', 'new completion is unread again');

@@ -40,7 +40,7 @@ test('writeStatus 落盘字段与 PROTOCOL.md 一致', () => {
   }, dir);
 
   const rec = JSON.parse(fs.readFileSync(file, 'utf8'));
-  assert.strictEqual(rec.schema, 2);
+  assert.strictEqual(rec.schema, 3);
   assert.strictEqual(rec.agent, 'claude-code');
   assert.strictEqual(rec.sessionId, 'abc-123');
   assert.strictEqual(rec.cwd, '/Users/me/projects/demo');
@@ -88,6 +88,19 @@ test('并发覆盖写：读到的永远是完整 JSON（原子性可观测证据
     const rec = JSON.parse(fs.readFileSync(path.join(dir, 'race.json'), 'utf8'));
     assert.strictEqual(rec.lastEvent, `E${i}`);
   }
+});
+
+test('进程崩溃留下的锁可恢复，活跃持有者不会被强占', () => {
+  const dir=tmp(), file=sf.fileFor('locked',dir), lock=file+'.lock';
+  const base={agent:'claude-code',sessionId:'locked',cwd:'/fixture',state:'running',lastEvent:'UserPromptSubmit',ts:1000};
+  // A child that has actually exited supplies a known-dead PID.
+  const child=require('child_process').spawnSync(process.execPath,['-e','process.exit(0)']);
+  fs.writeFileSync(lock,String(child.pid));sf.writeStatus(base,dir);
+  assert.strictEqual(sf.readStatus('locked',dir).state,'running');assert.strictEqual(fs.existsSync(lock),false);
+  fs.writeFileSync(lock,String(process.pid));
+  assert.throws(()=>sf.writeStatus({...base,state:'done',lastEvent:'Stop',ts:2000},dir),/status-write-busy/);
+  assert.strictEqual(sf.readStatus('locked',dir).state,'running');assert.strictEqual(fs.readFileSync(lock,'utf8'),String(process.pid));
+  fs.unlinkSync(lock);
 });
 
 test('目录不存在时自动 mkdir -p', () => {
@@ -388,15 +401,13 @@ test('schema:2 回合编号落盘、旧版本兼容、新回合重新计时、�
   assert.strictEqual(sf.readStatus('turns', dir).since, 3000);
   assert.strictEqual(sf.readStatus('turns', dir).turnId, second);
   const file = path.join(dir,'turns.json'); const rec = sf.readStatus('turns', dir);
-  assert.strictEqual(rec.schema, 2);
+  assert.strictEqual(rec.schema, 3);
   fs.writeFileSync(file, JSON.stringify({...rec,schema:1,turnId:undefined}));
   assert.strictEqual(sf.readStatus('turns',dir).state, 'running');
   fs.writeFileSync(file, JSON.stringify({...rec,turnId:'invalid'}));
   assert.strictEqual(sf.readStatus('turns',dir), null);
 });
 
-for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
-console.log(`\nstate-files-test: ${passed} passed`);
 
 // ---- since：活跃段起点（2026-09-11 修「工具调用把 mm:ss 计时归零」缺陷）----
 
@@ -453,3 +464,6 @@ test('readStatus 读回合法记录、拒绝损坏记录（判据方向别写反
   assert.strictEqual(sf.readStatus('bad', dir), null, '损坏记录必须返回 null');
   assert.strictEqual(sf.readStatus('nonexistent', dir), null, '不存在时返回 null');
 });
+
+for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+console.log(`\nstate-files-test: ${passed} passed`);

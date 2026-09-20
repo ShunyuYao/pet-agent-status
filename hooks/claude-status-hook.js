@@ -17,8 +17,8 @@ function quit() {
 }
 
 function handle(raw) {
-  const { stateForEvent, isEmptySessionEnd } = require(path.join(LIB, 'claude-events.js'));
-  const { writeStatus, readStatus, removeStatus } = require(path.join(LIB, 'state-files.js'));
+  const { stateForEvent } = require(path.join(LIB, 'claude-events.js'));
+  const { writeStatus } = require(path.join(LIB, 'state-files.js'));
   const { resolveTty, resolveAgentPid } = require(path.join(LIB, 'tty-detect.js'));
   const { isNestedAgentSession } = require(path.join(LIB, 'nested-session.js'));
 
@@ -36,13 +36,7 @@ function handle(raw) {
   // 判据与 fail-open 方向在 lib/nested-session.js；这里放在最前面，连已有记录都不碰。
   if (isNestedAgentSession(process.ppid)) return;
 
-  // 空会话收尾：一步都没往前走过的会话结束时清掉它，别留一条绿色「已完成」
-  // （判据与理由在 lib/claude-events.js#isEmptySessionEnd）。
-  if (isEmptySessionEnd(event.hook_event_name, readStatus(event.session_id))) {
-    removeStatus(event.session_id);
-    return;
-  }
-
+  // 空会话收尾在状态写入锁内核对，避免检查后另一事件写入而被误删。
   const input = {
     agent: 'claude-code',
     sessionId: event.session_id,

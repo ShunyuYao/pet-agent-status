@@ -55,6 +55,7 @@ const { writeStatus } = require('../lib/state-files');
 
     // Status changes between scheduler ticks: a click must use the current file.
     at += 1000;
+    writeStatus({ ...done, ts: at, state:'running', lastEvent:'UserPromptSubmit' }, dir);
     writeStatus({ ...done, ts: at }, dir);
     click('claude');
     assert.strictEqual(snapshot().rows.length, 0, 'new completion is picked without waiting for a scheduled tick');

@@ -41,7 +41,8 @@ function rig(dir) {
   const s = new EventEmitter();
   s.write = () => true;
   s.destroy = () => {};
-  const ingest = createCodexAppIngest({ dir, now: () => T0 });
+  let turn = {id:CID,status:'inProgress',startedAt:T0};
+  const ingest = createCodexAppIngest({ dir, now: () => T0, threadFor:()=>({turn}) });
   const api = ipc.createCodexIpc({
     socketPath: '/fake/ipc.sock', connect: () => s, randomUUID: () => 'u',
     setTimer: () => ({}), clearTimer: () => {},
@@ -51,7 +52,7 @@ function rig(dir) {
   api.start();
   s.emit('connect');
   s.emit('data', ipc.encodeFrame({ type: 'response', method: 'initialize' }));
-  return { feed: (msg) => s.emit('data', ipc.encodeFrame(msg)), api };
+  return { setTurn: value => {turn=value;}, complete:()=>{turn={id:CID,status:'completed',startedAt:T0,completedAt:T0};}, feed: (msg) => s.emit('data', ipc.encodeFrame(msg)), api };
 }
 // 实录到的三种广播帧原样形状（fixtures/codex-ipc-facts.md §8.2）
 function submitFrame(cid) {
@@ -73,7 +74,7 @@ test('提交帧 → 落盘 running（codex/app/ipc，threadId=会话 id，过 va
   assert.strictEqual(sf.validateRecord(rec), null, '落盘记录必须过协议校验');
   assert.strictEqual(rec.agent, 'codex');
   assert.strictEqual(rec.form, 'app');
-  assert.strictEqual(rec.source, 'ipc');
+  assert.strictEqual(rec.source, 'reconcile');
   assert.strictEqual(rec.state, 'running');
   assert.strictEqual(rec.threadId, CID);
   assert.strictEqual(rec.tty, null, 'App 任务没有终端');
@@ -86,20 +87,20 @@ test('回合完成帧 → done（提交→运行→完成的真实事件序列�
   const r = rig(dir);
   r.feed(submitFrame(CID));
   assert.strictEqual(sf.readStatus(CID, dir).state, 'running');
-  r.feed(turnDoneFrame(CID, true));
+  r.complete(); r.feed(turnDoneFrame(CID, true));
   const rec = sf.readStatus(CID, dir);
   assert.strictEqual(rec.state, 'done');
-  assert.strictEqual(rec.lastEvent, 'ipc:turn-unread');
+  assert.strictEqual(rec.lastEvent, 'reconcile:turn-completed');
 });
 
 // ---- ③ 已读语义 ----
-test('已读帧（false）把已存在的 ipc 记录转 ended', () => {
+test('已读帧只标记结果已读', () => {
   const dir = tmp();
   const r = rig(dir);
   r.feed(submitFrame(CID));
-  r.feed(turnDoneFrame(CID, true));
+  r.complete(); r.feed(turnDoneFrame(CID, true));
   r.feed(turnDoneFrame(CID, false));
-  assert.strictEqual(sf.readStatus(CID, dir).state, 'ended');
+  assert.strictEqual(sf.readStatus(CID, dir).state, 'done');
 });
 
 test('没见过的会话来已读帧（false）绝不新建（不报旧闻）', () => {
@@ -109,10 +110,10 @@ test('没见过的会话来已读帧（false）绝不新建（不报旧闻）', 
   assert.deepStrictEqual(fs.readdirSync(dir).filter((n) => n.endsWith('.json')), []);
 });
 
-test('没见过的会话直接来完成帧（true）→ 允许落 done（回合确实完成了）', () => {
+test('陌生会话的未读通知不补建历史完成', () => {
   const dir = tmp();
-  rig(dir).feed(turnDoneFrame(CID, true));
-  assert.strictEqual(sf.readStatus(CID, dir).state, 'done');
+  const r=rig(dir); r.complete(); r.feed(turnDoneFrame(CID, true));
+  assert.strictEqual(sf.readStatus(CID, dir), null);
 });
 
 // ---- ④ 不覆盖 hooks 记录 ----
@@ -122,7 +123,7 @@ test('CLI hooks 写的同名会话（source hook，含 tty）绝不被 IPC 覆�
     pid: 4242, state: 'waiting', lastEvent: 'PermissionRequest', ts: T0 - 1000, threadId: CID }, dir);
   const r = rig(dir);
   r.feed(submitFrame(CID));
-  r.feed(turnDoneFrame(CID, true));
+  r.complete(); r.feed(turnDoneFrame(CID, true));
   const rec = sf.readStatus(CID, dir);
   assert.strictEqual(rec.source, 'hook', 'hook 记录被 IPC 覆盖了');
   assert.strictEqual(rec.state, 'waiting');
@@ -175,15 +176,15 @@ test('落盘失败（目录是只读文件占位）不抛：摄入绝不打死�
 test('rollout 活动没有新回合证据时保持完成屏障', () => {
   const dir = tmp();
   const r = rig(dir);
-  r.feed(turnDoneFrame(CID, true));   // 真实序列：上一回合的 done 记录还在
+  r.feed(submitFrame(CID)); r.complete(); r.feed(turnDoneFrame(CID, true));   // 真实序列：上一回合的 done 记录还在
   const ingest = createCodexAppIngest({ dir, now: () => T0 + 1000 });
   ingest.onRolloutActivity(CID);      // 不给 canClaim：已有记录本身就是归属证据
   const rec = sf.readStatus(CID, dir);
   assert.strictEqual(sf.validateRecord(rec), null);
   assert.strictEqual(rec.state, 'done');
-  assert.strictEqual(rec.source, 'ipc');
+  assert.strictEqual(rec.source, 'reconcile');
   assert.strictEqual(rec.form, 'app');
-  assert.strictEqual(rec.lastEvent, 'ipc:turn-unread');
+  assert.strictEqual(rec.lastEvent, 'reconcile:turn-completed');
 });
 
 test('rollout 活动 + 陌生线程：canClaim=false 一个文件都不落；following 佐证才落', () => {
@@ -227,10 +228,10 @@ test('IPC 的 done 能覆盖 reconcile 写的 running（同属摄入系）', () 
   const dir = tmp();
   const ingest = createCodexAppIngest({ dir, now: () => T0 });
   ingest.onRolloutActivity(CID, () => true);
-  rig(dir).feed(turnDoneFrame(CID, true));   // 真帧走完整链路
+  const r=rig(dir); r.complete(); r.feed(turnDoneFrame(CID, true));   // 真帧走完整链路
   const rec = sf.readStatus(CID, dir);
   assert.strictEqual(rec.state, 'done');
-  assert.strictEqual(rec.source, 'ipc');
+  assert.strictEqual(rec.source, 'reconcile');
 });
 
 test('提交时刻的已读帧（false）：rollout 活动中 → 不翻 ended；活动停了 → 照常 ended', () => {
@@ -243,7 +244,7 @@ test('提交时刻的已读帧（false）：rollout 活动中 → 不翻 ended�
   assert.strictEqual(sf.readStatus(CID, dir).state, 'running', '正在跑，「已读」不算结束');
   active = false;
   ingest.onReadState(CID, false, () => active);
-  assert.strictEqual(sf.readStatus(CID, dir).state, 'ended', '活动停了，已读照常收尾');
+  assert.strictEqual(sf.readStatus(CID, dir).state, 'running', '活动停止与已读都不能证明结束');
 });
 
 test('rollout 活动收到非 UUID 形态 id → 不落盘', () => {

@@ -94,14 +94,14 @@ test('error 推导：running + 超 60s + pid 不存活', () => {
   const snap = seed(dir, [rec({ sessionId: 'a', state: 'running', pid: 999999, ts: T0 - 90 * 1000 })]);
   const { rows } = run(snap, { isPidAlive: () => false });
   assert.strictEqual(rows.length, 1);
-  assert.strictEqual(rows[0].state, 'error');
-  assert.strictEqual(rows[0].subline, t('state.error'));
+  assert.strictEqual(rows[0].state, 'sync-paused');
+  assert.strictEqual(rows[0].subline, t('state.syncPaused', {state:t('state.running')}));
 });
 
 test('error 推导：waiting 也适用', () => {
   const dir = tmp();
   const snap = seed(dir, [rec({ sessionId: 'a', state: 'waiting', ts: T0 - 90 * 1000 })]);
-  assert.strictEqual(run(snap, { isPidAlive: () => false }).rows[0].state, 'error');
+  assert.strictEqual(run(snap, { isPidAlive: () => false }).rows[0].state, 'sync-paused');
 });
 
 test('pid 存活时不判 error（哪怕已超 60s）', () => {
@@ -129,12 +129,12 @@ test('60s 边界：正好 60s 不判 error，60s+1ms 才判', () => {
   assert.strictEqual(run(at, { isPidAlive: () => false }).rows[0].state, 'running');
   const dir2 = tmp();
   const over = seed(dir2, [rec({ sessionId: 'a', ts: T0 - 60 * 1000 - 1 })]);
-  assert.strictEqual(run(over, { isPidAlive: () => false }).rows[0].state, 'error');
+  assert.strictEqual(run(over, { isPidAlive: () => false }).rows[0].state, 'sync-paused');
 });
 
 // ---- 2. idle 推导与 20min 移除 ----
 
-test('done / ended 前 5 分钟显示为 done（绿驻留），过窗转 idle', () => {
+test('正常完成与停止分别保留事实，过提醒窗口不改为闲置', () => {
   const dir = tmp();
   const snap = seed(dir, [
     rec({ sessionId: 'a', state: 'done', lastEvent: 'Stop', ts: T0 - 1000 }),
@@ -145,13 +145,13 @@ test('done / ended 前 5 分钟显示为 done（绿驻留），过窗转 idle', 
   const states = {};
   for (const r of run(snap).rows) states[r.sessionId] = r.state;
   // 驻留窗边界（恰好 5 分钟）仍算 done，过一毫秒才转 idle
-  assert.deepStrictEqual(states, { a: 'done', b: 'done', c: 'idle', edge: 'done' });
+  assert.deepStrictEqual(states, { a: 'done', b: 'stopped', c: 'done', edge: 'done' });
 });
 
-test('running 超 20min 变 idle', () => {
+test('长期无证据的运行显示同步暂停', () => {
   const dir = tmp();
   const snap = seed(dir, [rec({ sessionId: 'a', ts: T0 - 21 * MIN })]);
-  assert.strictEqual(run(snap).rows[0].state, 'idle');
+  assert.strictEqual(run(snap).rows[0].state, 'sync-paused');
 });
 
 test('idle 超 20min 不进输出行（面板移除）', () => {
@@ -168,35 +168,30 @@ test('error 优先于 idle：超 20min 且 pid 死了仍报 error 不移除', ()
   const snap = seed(dir, [rec({ sessionId: 'a', state: 'running', ts: T0 - 25 * MIN })]);
   const { rows } = run(snap, { isPidAlive: () => false });
   assert.strictEqual(rows.length, 1, 'error 行不该被 idle 移除规则吃掉');
-  assert.strictEqual(rows[0].state, 'error');
+  assert.strictEqual(rows[0].state, 'sync-paused');
 });
 
 // ---- 3. unknown：绝不映射成 done ----
 
-test('损坏文件归 unknown 行，绝不当 done/idle', () => {
+test('损坏文件单列诊断，不制造任务', () => {
   const dir = tmp();
   seed(dir, [rec({ sessionId: 'good', state: 'running' })]);
   fs.writeFileSync(path.join(dir, 'broken.json'), '{ 截断的', 'utf8');
   const { rows, summary } = run(sf.readSnapshots(dir));
-  const bad = rows.find((r) => r.sessionId === 'broken');
-  assert.ok(bad, 'unknown 文件也要有一行，否则用户看不出有会话读不了');
-  assert.strictEqual(bad.state, 'unknown');
-  assert.strictEqual(bad.subline, t('state.unknown'));
-  assert.notStrictEqual(bad.subline, t('state.done'));
-  assert.notStrictEqual(bad.subline, t('state.idle'), 'unknown 文案必须与 idle 区分');
-  assert.strictEqual(summary.unknown, 1);
+  assert.deepStrictEqual(byId(rows), ['good']);
+  assert.strictEqual(summary.diagnostics, 1);
+  assert.strictEqual(summary.unknown, 0);
 });
 
-test('schema 高于当前版本归 unknown（不当 done）', () => {
+test('不支持的 schema 单列诊断', () => {
   const dir = tmp();
   fs.writeFileSync(path.join(dir, 'future.json'), JSON.stringify({
     schema: 99, agent: 'claude-code', sessionId: 'future', cwd: '/x', project: 'x',
     tty: null, pid: null, state: 'done', lastEvent: 'Stop', ts: T0
   }), 'utf8');
-  const { rows } = run(sf.readSnapshots(dir));
-  assert.strictEqual(rows.length, 1);
-  assert.strictEqual(rows[0].state, 'unknown');
-  assert.strictEqual(rows[0].reason, 'schema-too-new');
+  const { rows, summary } = run(sf.readSnapshots(dir));
+  assert.strictEqual(rows.length, 0);
+  assert.strictEqual(summary.diagnostics, 1);
 });
 
 // ---- 4. 排序：waiting 恒置顶 ----
@@ -225,7 +220,7 @@ test('criteria §3 场景：[waiting 置顶, running, done(idle), error]', () =>
   // error 只因 pid 探测为假而来：同一份输入换成「pid 存活」就该是 running
   const dead = run(snap, { isPidAlive: (pid) => pid !== 999999 });
   assert.deepStrictEqual(byId(dead.rows), ['w-old', 'r-new', 'e', 'd']);
-  assert.deepStrictEqual(dead.rows.map((r) => r.state), ['waiting', 'running', 'error', 'done']);
+  assert.deepStrictEqual(dead.rows.map((r) => r.state), ['waiting', 'running', 'sync-paused', 'done']);
   const allAlive = run(snap, { isPidAlive: () => true });
   assert.strictEqual(allAlive.rows.find((r) => r.sessionId === 'e').state, 'running',
     'error 必须来自 pid 探测，不是别的原因');
@@ -242,7 +237,7 @@ test('非 waiting 行只按 ts 降序，与状态无关（error 不因是 error 
   ]);
   const { rows } = run(snap, { isPidAlive: (pid) => pid !== 999999 });
   assert.deepStrictEqual(byId(rows), ['d', 'e'], 'ts 更新的 done 应排在更旧的 error 之前');
-  assert.deepStrictEqual(rows.map((r) => r.state), ['done', 'error']);
+  assert.deepStrictEqual(rows.map((r) => r.state), ['done', 'sync-paused']);
 });
 
 // ---- 5. 行结构：panel 不再算业务字段 ----
@@ -312,7 +307,7 @@ test('summary 计数与行一致', () => {
   const { summary } = run(snap);
   // 逐字段全等：summary 是 panel/徽标/联动的共同契约，加字段必须在这里同步声明
   assert.deepStrictEqual(summary, {
-    running: 2, waiting: 1, done: 0, total: 3, unknown: 0, hiddenNoTarget: 0,
+    running: 2, waiting: 1, done: 0, total: 3, unknown: 0, syncPaused: 0, waitingInput: 0, diagnostics: 0, hiddenNoTarget: 0,
     focus: { sessionId: 'w1', state: 'waiting', project: 'demo' }
   });
 });
@@ -328,10 +323,10 @@ test('summary.done 只计绿驻留窗内的完成行', () => {
     rec({ sessionId: 'r1', state: 'running', ts: T0 })
   ]);
   const { rows, summary } = run(snap);
-  assert.strictEqual(summary.done, 2, '5 分钟驻留窗内的 done/ended 都算');
+  assert.strictEqual(summary.done, 1, '5 分钟驻留窗内的 done/ended 都算');
   assert.strictEqual(summary.running, 1);
   // 过窗那条已转 idle，行还在（未到 DROP_IDLE_MS）但不进 done 计数
-  assert.strictEqual(rows.find((x) => x.sessionId === 'd-old').state, 'idle');
+  assert.strictEqual(rows.find((x) => x.sessionId === 'd-old').state, 'done');
 });
 
 test('空目录 → 空行与零计数（面板据此进空态）', () => {
@@ -559,8 +554,8 @@ test('unknown 行不触发任何联动（读不出来的会话绝不报完成）
   const m = mockPet();
   fs.writeFileSync(path.join(dir, 'broken.json'), '{ 截断的', 'utf8');
   const out = run(sf.readSnapshots(dir));
-  assert.strictEqual(out.rows[0].state, 'unknown');
-  assert.strictEqual(out.rows[0].raw, 'unknown');
+  assert.strictEqual(out.rows.length, 0);
+  assert.strictEqual(out.summary.diagnostics, 1);
   link.onSnapshot(out.rows, m, { now: T0, t });
   assert.deepStrictEqual(m.calls, []);
 });
@@ -573,8 +568,6 @@ test('测试全程未触碰真实状态目录', () => {
   assert.deepStrictEqual(leakedBackups(), [], '测试在真实配置旁留下了备份文件');
 });
 
-for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
-console.log(`\n${passed} passed`);
 
 // ---- 6. 聚焦会话（对齐 Codex Pets following 语义的 CLI 版）----
 
@@ -691,21 +684,18 @@ test('App 行（form app、无 tty、合法 threadId）canJump=true；threadId �
 
 // ---- 8. unknown 的两个来源，副行文案必须分开（2026-09-11 用户反馈）----
 
-test('久无心跳的 unknown 给行动指引，与「文件读不出」的 unknown 文案不同', () => {
+test('同步中断保留最后状态；损坏文件单列诊断，不伪造会话', () => {
   const dir = tmp();
-  // 用户真实场景：批准后 agent 不再发事件，waiting 卡住 19 分钟，进程还活着
   const snap = seed(dir, [rec({ sessionId: 'stale', state: 'waiting', lastEvent: 'Notification', ts: T0 - 19 * MIN })]);
-  const stale = run(snap, { isPidAlive: () => true }).rows[0];
-  assert.strictEqual(stale.state, 'unknown', '展示态仍是 unknown（不新增展示态）');
-  assert.strictEqual(stale.subline, t('state.stale'), '应给「可能已结束·点击确认」这类行动指引');
-
-  // 对照：真读不出来的文件——给指引也没用，保持中性文案
-  const broken = agg.aggregate({ records: [], unknown: [{ file: 'x.json', reason: 'bad json' }] },
-    { now: T0, isPidAlive: () => true, t }).rows[0];
-  assert.strictEqual(broken.state, 'unknown');
-  assert.strictEqual(broken.subline, t('state.unknown'));
-
-  assert.notStrictEqual(stale.subline, broken.subline, '两种处境不能共用一句话');
+  const out = run(snap);
+  assert.strictEqual(out.rows[0].state, 'sync-paused');
+  assert.strictEqual(out.rows[0].raw, 'waiting');
+  assert.strictEqual(out.rows[0].subline, t('state.syncPaused', {state:t('state.waiting')}));
+  assert.strictEqual(out.summary.waiting, 0);
+  assert.strictEqual(out.summary.syncPaused, 1);
+  const broken = run({records:[],unknown:[{file:'x.json',reason:'bad json'}]});
+  assert.strictEqual(broken.rows.length, 0);
+  assert.strictEqual(broken.summary.diagnostics, 1);
 });
 
 test('stale 文案不与 idle/done 混淆（绝不误报完成）', () => {
@@ -778,8 +768,8 @@ test('可能已中断（error）的行被点掉后收起，且有新动静自动
   const snap = seed(dir, [rec({ sessionId: 'x', state: 'running', ts: T0 - 90 * 1000 })]);
   const before = run(snap, { isPidAlive: () => false }).rows;
   assert.strictEqual(before.length, 1);
-  assert.strictEqual(before[0].state, 'error', '前置：应推导出 error 态');
-  assert.ok(agg.DISMISSIBLE.has('error'), 'error 应属可收起态');
+  assert.strictEqual(before[0].state, 'sync-paused', '前置：应推导出 error 态');
+  assert.ok(agg.DISMISSIBLE.has('sync-paused'), 'error 应属可收起态');
   const after = agg.aggregate(sf.readSnapshots(dir),
     { now: T0, isPidAlive: () => false, t, dismissedAt: { x: T0 } }).rows;
   assert.strictEqual(after.length, 0, 'error 点掉后应收起');
@@ -802,7 +792,7 @@ test('行带 canDismiss 标志：可收起态为 true，running/waiting 为 fals
   const rows = run(snap, { isPidAlive: (pid) => pid !== 999999 }).rows;
   const byId = Object.fromEntries(rows.map((r) => [r.sessionId, r]));
   assert.strictEqual(byId.r.canDismiss, false, 'running 不可收起');
-  assert.strictEqual(byId.e.state, 'error');
+  assert.strictEqual(byId.e.state, 'sync-paused');
   assert.strictEqual(byId.e.canDismiss, true, 'error 可收起');
   assert.strictEqual(byId.d.canDismiss, true, 'done 可收起');
 });
@@ -993,11 +983,14 @@ test('有 tty 但认不出终端 App：仍然显示（绝不按 canJump 过滤�
   assert.strictEqual(r.summary.hiddenNoTarget, 0);
 });
 
-test('读不出来的坏文件行照常保留（那是诊断信息，不是"点不进去的后台会话"）', () => {
+test('坏文件计入诊断，不计后台或任务数量', () => {
   const dir = tmp();
   fs.writeFileSync(path.join(dir, 'broken.json'), '{ 这不是 JSON');
   const r = agg.aggregate(sf.readSnapshots(dir), { now: T0, isPidAlive: () => true, t });
-  assert.strictEqual(r.rows.length, 1, '坏文件仍要有一行，否则用户看不出有会话读不了');
-  assert.strictEqual(r.rows[0].state, 'unknown');
+  assert.strictEqual(r.rows.length, 0);
+  assert.strictEqual(r.summary.diagnostics, 1);
   assert.strictEqual(r.summary.hiddenNoTarget, 0);
 });
+
+for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+console.log(`\n${passed} passed`);

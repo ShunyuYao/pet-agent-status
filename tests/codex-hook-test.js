@@ -148,10 +148,10 @@ test('实录夹具漂移守卫：四份实录同属一次会话，且 hook_event
 // ================================================================
 
 const RECORDED = [
-  ['session-start.json', 'SessionStart', 'running'],
+  ['session-start.json', 'SessionStart', 'idle'],
   ['user-prompt-submit.json', 'UserPromptSubmit', 'running'],
   ['stop.json', 'Stop', 'done'],
-  ['session-end.json', 'SessionEnd', 'ended']
+  ['session-end.json', 'SessionEnd', 'stopped']
 ];
 
 for (const [fixture, event, state] of RECORDED) {
@@ -224,7 +224,7 @@ test('落盘记录字段集合恰好是 PROTOCOL.md 字段表（含 threadId，�
   runFixture('session-start.json', dir);
   const rec = readOnly(dir);
 
-  assert.strictEqual(rec.schema, 2);
+  assert.strictEqual(rec.schema, 3);
   assert.strictEqual(rec.agent, 'codex');
   assert.strictEqual(rec.sessionId, fx.session_id);
   assert.strictEqual(rec.cwd, fx.cwd);
@@ -234,7 +234,7 @@ test('落盘记录字段集合恰好是 PROTOCOL.md 字段表（含 threadId，�
   assert.ok(rec.tty === null || /^\/dev\/ttys?[a-z0-9]+$/i.test(rec.tty), `tty 形态异常: ${rec.tty}`);
   assert.ok(rec.pid === null || Number.isFinite(rec.pid));
 
-  const allowed = new Set(sf.REQUIRED.concat(['threadId', 'source', 'since']));
+  const allowed = new Set(sf.REQUIRED.concat(['threadId', 'source', 'since', 'runId', 'read']));
   for (const k of Object.keys(rec)) assert.ok(allowed.has(k), `协议外字段: ${k}`);
   // 经 state-files 自己的校验器复核一遍（读侧认不认才算数）
   assert.strictEqual(sf.validateRecord(rec), null);
@@ -911,16 +911,16 @@ test('PROTOCOL.md 只增不改：Claude Code 映射表七行原样在位', () =>
   const md = fs.readFileSync(path.join(ROOT, 'PROTOCOL.md'), 'utf8');
   const claudeTable = md.slice(md.indexOf('| Claude Code hook 事件'), md.indexOf('Codex CLI 事件映射'));
   const EXPECT = [
-    ['SessionStart', 'running'], ['UserPromptSubmit', 'running'],
+    ['SessionStart', 'idle'], ['UserPromptSubmit', 'running'],
     ['PreToolUse` / `PostToolUse', 'running'], ['Notification', 'waiting'],
-    ['Stop', 'done'], ['SessionEnd', 'ended']
+    ['Stop', 'done'], ['SessionEnd', 'stopped']
   ];
   for (const [ev, st] of EXPECT) {
     const line = claudeTable.split('\n').find((l) => l.includes(`\`${ev}\``));
     assert.ok(line, `Claude Code 表少了 ${ev} 这一行`);
     assert.ok(line.includes(`\`${st}\``), `Claude Code 表的 ${ev} 被改动了：${line}`);
   }
-  assert.strictEqual(md.includes('schema:2'), true, '写入协议版本应与实现一致');
+  assert.strictEqual(md.includes('schema:3'), true, '写入协议版本应与实现一致');
 });
 
 test('测试全程未触碰真实 ~/.codex 与真实状态目录', () => {

@@ -10,6 +10,7 @@ const os = require('os');
 const LIB = path.join(__dirname, '..', 'lib');
 const stateFiles = require(path.join(LIB, 'state-files.js'));
 const { aggregate, DISMISSIBLE } = require(path.join(LIB, 'aggregate.js'));
+const { createStatusHistory } = require(path.join(LIB, 'status-history.js'));
 const { createPetLink } = require(path.join(LIB, 'pet-link.js'));
 const { createBadgeLink } = require(path.join(LIB, 'badge.js'));
 const deeplink = require(path.join(LIB, 'codex-deeplink.js'));
@@ -126,6 +127,8 @@ function createCollector(deps) {
   // 可注入：测试绝不读维护者机器上的真实 App 目录（隔离红线，同 threadTitles）。
   const claudeDesktop = d.claudeDesktop || cds.createClaudeDesktopSessions({ now });
   let codexIpc = null;
+  let settingsRevision = 0;
+  let settingWrite = false;
   let ipcEnabled = null;   // 上次读到的开关值（null = 还没读过）
   // 缺省 undefined → installer 自己走 settingsPath()（即 PET_AS_CLAUDE_SETTINGS 覆盖）；
   // 测试注入临时文件，绝不碰真实 ~/.claude/settings.json
@@ -134,7 +137,16 @@ function createCollector(deps) {
   // 测试注入临时文件，绝不碰真实 ~/.codex/hooks.json
   const codexOpts = d.codexHooksFile ? { hooksFile: d.codexHooksFile } : undefined;
 
+  const statusHistory = createStatusHistory({now});
+  let notificationWrite = Promise.resolve();
+  function saveNotifications(pet) {
+    const saved = link.exportState();
+    notificationWrite = notificationWrite.catch(() => {}).then(async () => {
+      if (pet?.storage?.set) await pet.storage.set('notifiedRounds', saved);
+    }).catch(() => {});
+  }
   let taskId = null;
+  const confirmedRecords = new Map();
   let lastSnapshot = { rows: [], summary: { running: 0, waiting: 0, total: 0, unknown: 0 } };
   let hasSnapshot = false;
   let lastInstallState = null;
@@ -200,7 +212,10 @@ function createCollector(deps) {
 
   // 按开关开/关 IPC 增强。设置是运行时可改的，每轮 tick 都对一次。
   async function syncCodexIpc(pet) {
+    if (settingWrite) return;
+    const revision = settingsRevision;
     const want = await readIpcEnabled(pet);
+    if (revision !== settingsRevision || settingWrite) return;
     ipcEnabled = want;
     if (want && !codexIpc) {
       codexIpc = ipcFactory({
@@ -215,7 +230,6 @@ function createCollector(deps) {
     } else if (!want && codexIpc) {
       codexIpc.stop();
       codexIpc = null;
-      ingest.clearPending();
     }
   }
 
@@ -223,7 +237,8 @@ function createCollector(deps) {
   function pushSettingsState(pet) {
     emit(pet, SETTINGS_STATE_EVENT, {
       codexIpcEnabled: ipcEnabled == null ? true : ipcEnabled,
-      ipcState: codexIpc ? codexIpc.state : 'off'
+      ipcState: codexIpc ? codexIpc.state : 'off',
+      approvalDetection: 'unavailable'
     });
   }
 
@@ -231,14 +246,19 @@ function createCollector(deps) {
   async function handleSetSetting(pet, data) {
     if (!data || data.key !== IPC_ENABLED_KEY) return;
     const value = data.value !== false;
+    const revision = ++settingsRevision;
+    settingWrite = true;
+    ipcEnabled = value;
     try {
       if (pet && pet.storage && typeof pet.storage.set === 'function') {
         await pet.storage.set(IPC_ENABLED_KEY, value);
       }
     } catch (_) { /* 存不下也先按用户意图切运行态，下轮读回真值自会纠偏 */ }
+    if (revision !== settingsRevision) return;
+    settingWrite = false;
     ipcEnabled = value;
     if (value && !codexIpc) await syncCodexIpc(pet);
-    else if (!value && codexIpc) { codexIpc.stop(); codexIpc = null; ingest.clearPending(); }
+    else if (!value && codexIpc) { codexIpc.stop(); codexIpc = null; }
     pushSettingsState(pet);
   }
 
@@ -257,8 +277,9 @@ function createCollector(deps) {
         const saved = await pet.storage.get(DISMISSED_KEY);
         if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
           for (const [id, at] of Object.entries(saved)) {
-            if (/^[A-Za-z0-9._-]+$/.test(id) && Number.isFinite(at) && at >= 0) {
-              dismissedAt.set(id, Math.max(at, dismissedAt.get(id) || 0));
+            if (!/^[A-Za-z0-9._-]+$/.test(id)) continue;
+            if (Number.isFinite(at) && at >= 0 || at && Number.isFinite(at.at) && Number.isFinite(at.ts) && typeof at.runId === 'string') {
+              if (!dismissedAt.has(id)) dismissedAt.set(id, at);
             }
           }
         }
@@ -280,7 +301,9 @@ function createCollector(deps) {
     const current = new Map(records.map((r) => [r.sessionId, r]));
     for (const [id, at] of dismissedAt) {
       const rec = current.get(id);
-      if ((rec && rec.ts > at) || (!rec && now() - at > 30 * 24 * 60 * 60 * 1000)) {
+      const stamp = Number.isFinite(at) ? at : at.at;
+      const changed = rec && (at.runId && (rec.runId || rec.turnId) ? at.runId !== (rec.runId || rec.turnId) : rec.ts > stamp);
+      if (changed || (!rec && now() - stamp > 30 * 24 * 60 * 60 * 1000)) {
         dismissedAt.delete(id);
         dismissedDirty = true;
       }
@@ -323,7 +346,7 @@ function createCollector(deps) {
     const dismiss = row && DISMISSIBLE.has(row.state)
       && (result.ok || result.reason === 'unavailable');
     if (dismiss) {
-      dismissedAt.set(sessionId, at);
+      dismissedAt.set(sessionId, {at, runId:row.runId, ts:row.ts});
       dismissedDirty = true;
     }
     if (result.ok || dismiss) {
@@ -359,7 +382,6 @@ function createCollector(deps) {
       const isAppRecord = r => r.agent === 'codex' && (r.source === 'ipc' || r.source === 'reconcile');
       const ids = new Set((before.records || []).filter(isAppRecord).map(r => r.threadId || r.sessionId));
       if (codexIpc) for (const id of codexIpc.followingIds()) ids.add(id);
-      if (ipcEnabled !== false) for (const id of ingest.pendingIds()) ids.add(id);
       // Identity filtering also applies to historical records when enhancement is off.
       // Keep missing entries so tracked rollout paths survive optional DB failures.
       let metadata = new Map();
@@ -371,7 +393,7 @@ function createCollector(deps) {
       // 或 App 正在跟随该线程（following 是纯 App 侧信号）。
       if (ipcEnabled !== false) {
         try {
-          for (const id of ingest.pendingIds()) ingest.reconcileReadState(id, metadata.get(id));
+          for (const id of ids) ingest.reconcileTurn(id, metadata.get(id));
           rolloutActive = rollout.activeThreads(metadata);
           for (const id of rolloutActive.keys()) {
             ingest.onRolloutActivity(id, (tid) => !!(codexIpc && codexIpc.isFollowing(tid)), metadata.get(id) || null);
@@ -384,6 +406,15 @@ function createCollector(deps) {
       // 无独立开关（v1，PROTOCOL.md）：没装 WorkBuddy 时模块自己静默无行为。
       try { workbuddy.tick(); } catch (_) { /* 摄入挂了不打死采集轮 */ }
       const raw = readSnapshots(d.dir);
+      const badNames = new Set((raw.unknown || []).map(item => path.basename(item.file)));
+      for (const record of raw.records) confirmedRecords.set(record.sessionId, record);
+      const present = new Set(raw.records.map(record => record.sessionId));
+      for (const [id, record] of confirmedRecords) {
+        if (present.has(id)) continue;
+        if (raw.unavailable || badNames.has(id + '.json')) raw.records.push({...record, syncPaused:true});
+        else confirmedRecords.delete(id);
+      }
+      if (raw.unavailable && confirmedRecords.size) raw.unknown.push({reason:'state-directory-unavailable'});
       pruneDismissed(raw.records || []);
       void syncDismissed(pet);
       // Filter before all shared outputs: rows, counts, focus, launchers, badge and
@@ -421,6 +452,8 @@ function createCollector(deps) {
         }
       });
       // locale 随快照下发，panel 据此选词表（契约仍是 {rows, summary}，locale 是附加字段）
+      statusHistory.observe(result.rows, visible.records);
+      void statusHistory.flush(pet);
       result.locale = locale;
       lastSnapshot = result;
       hasSnapshot = true;
@@ -431,7 +464,7 @@ function createCollector(deps) {
       pushInstallState(pet);
       pushSettingsState(pet);   // 设置视图同理随开随关，每轮都给
       pushApps(pet, result.rows);   // 底栏 App 启动器（探测有 5min 缓存，不是每轮 spawn）
-      link.onSnapshot(result.rows, pet, { now: at, t });
+      if (link.onSnapshot(result.rows, pet, { now: at, t }).length) saveNotifications(pet);
       // 折叠徽标（宿主 pet.badge.*）：数据取自同一份 summary，协议零改动。
       // 不 await：徽标失败不该拖慢/打断本轮采集，内部已自带 try/catch 与降级。
       void badgeLink.onSummary(result.summary, pet);
@@ -489,7 +522,7 @@ function createCollector(deps) {
     // 按点击时的最新状态与列表顺序取第一条完成项。图标只标识厂牌，
     // 真正落点由会话自己的 tty / App 导航信息决定，复用点行的收起与错误反馈。
     const snapshot = tick(pet);
-    const completed = snapshot.rows.find((row) => row.state === 'done'
+    const completed = snapshot.rows.find((row) => row.state === 'done' && row.read !== true && row.pendingDone !== false
       && appLauncher.AGENT_TO_APP[row.agent] === id);
     if (completed) return handleJump(pet, { sessionId: completed.sessionId });
     try { launcher.open(id); } catch (_) { /* 已在模块内兜住，这里再收一道 */ }
@@ -542,6 +575,8 @@ function createCollector(deps) {
     // 直接存 Promise 会让 cancel 拿到个对象、恒 miss，旧定时器永不回收（宿主已知坑）。
     // 已读恢复前只接意图，不采集/回推旧行（包括冷启动时 panel 的语言意图）。
     await syncDismissed(pet);
+    try { if (pet?.storage?.get) statusHistory.restore(await pet.storage.get('statusTransitions')); } catch (_) {}
+    try { if (pet?.storage?.get) link.restore(await pet.storage.get('notifiedRounds')); } catch (_) {}
     await syncCodexIpc(pet);
     restoringDismissed = false;
     taskId = await pet.scheduler.every(TICK_MS, () => tick(pet));
@@ -551,6 +586,8 @@ function createCollector(deps) {
 
   async function stop(pet) {
     await syncDismissed(pet);
+    await notificationWrite;
+    await statusHistory.flush(pet);
     if (taskId == null) return;
     const id = taskId;
     taskId = null;   // 先清再 cancel：cancel 失败也不该留个假 id 挡住下次 start
@@ -558,7 +595,7 @@ function createCollector(deps) {
     // 正常停用时自己把徽标撤干净（宿主虽有兜底清除，但那是给异常路径的）
     await badgeLink.dispose(pet);
     if (codexIpc) { codexIpc.stop(); codexIpc = null; }
-    ingest.clearPending();
+
   }
 
   return {

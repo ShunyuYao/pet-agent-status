@@ -66,11 +66,10 @@ function fireHook(event) {
       message: 'Claude is waiting for your input',
     }), stateDir);
 
-    const idleRow = await waitFor(() => rowOf(panel, sidIdle), '闲置会话行出现在面板上');
-    ok(!/state-waiting/.test(idleRow.cls),
-      '闲置提醒不再被显示成「等待你批准」（本轮修复的核心断言）', `${idleRow.cls} / ${idleRow.sub}`);
-    ok(!/批准|approv/i.test(idleRow.sub),
-      '该行副行文案里没有「批准」字样', idleRow.sub);
+    await host.evaluate(`new Promise(resolve => window.pet.events.on('agent-status:snapshot', () => resolve(true)))`);
+    ok(await rowOf(panel, sidIdle) === null, '发现与闲置提醒不产生运行或批准行');
+    const idleRecord = JSON.parse(fs.readFileSync(path.join(stateDir, sidIdle + '.json'), 'utf8'));
+    ok(idleRecord.state === 'idle', '真实 hook 记录保持闲置');
 
     // ---- 3. 陈旧 waiting 会被 compact 恢复清位 ----
     const sidStale = `pet-as-test-stale-${Date.now()}`;
@@ -85,12 +84,14 @@ function fireHook(event) {
     }, '前置条件：该会话先处于等待批准');
 
     fireHook(mkEvent(sidStale, { hook_event_name: 'SessionStart', source: 'compact' }), stateDir);
-    const cleared = await waitFor(async () => {
-      const r = await rowOf(panel, sidStale);
-      return r && !/state-waiting/.test(r.cls) ? r : null;
-    }, 'compact 恢复后清掉陈旧 waiting').catch(() => null);
-    ok(cleared !== null, 'compact 恢复把陈旧的「等待你批准」清掉',
-      cleared ? cleared.cls : '（仍停在 waiting）');
+    await host.evaluate(`new Promise(resolve => window.pet.events.on('agent-status:snapshot', () => resolve(true)))`);
+    const retained = await rowOf(panel, sidStale);
+    ok(retained && /state-waiting/.test(retained.cls), 'compact 发现事件不擅自覆盖批准请求');
+    fireHook(mkEvent(sidStale, {hook_event_name:'PreToolUse', tool_name:'Bash'}), stateDir);
+    const resumed = await waitFor(async () => {
+      const r = await rowOf(panel, sidStale); return r && /state-running/.test(r.cls) ? r : null;
+    }, '真实工具继续执行后恢复运行');
+    ok(!!resumed, '批准后工具开始事件清除等待');
 
     // ---- 4. 汇总胶囊不再把闲置会话计进「等待批准」----
     const summary = await evalIn(panel, `

@@ -453,7 +453,7 @@ test('安装写入的 command 原样执行可产出状态文件（闭环自证�
   assert.strictEqual(res.status, 0);
   const files = fs.readdirSync(stateDir).filter((n) => n.endsWith('.json'));
   assert.deepStrictEqual(files, [EXPECTED_STATE_FILE]);
-  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(stateDir, files[0]), 'utf8')).state, 'running');
+  assert.strictEqual(JSON.parse(fs.readFileSync(path.join(stateDir, files[0]), 'utf8')).state, 'idle');
 });
 
 // ---- 6b. 引号安全：含空格的插件目录下，command 经 shell 执行必须 rc=0 ----
