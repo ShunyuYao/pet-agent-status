@@ -66,7 +66,7 @@ function isPidAlive(pid) {
 
 /**
  * 造一个采集器。所有外部依赖可注入，测试不碰真实目录/时钟/进程。
- * @param {object} [deps] { dir, now, isPidAlive, t, playAnimGuard, readSnapshots }
+ * @param {object} [deps] { dir, now, isPidAlive, t, readSnapshots }
  */
 // Codex IPC socket 默认路径。与 hooks 配置同源认 CODEX_HOME（fixtures/codex-ipc-facts.md §1），
 // 可经 deps.codexIpcPath 覆盖（测试注入假路径，绝不碰真 socket）。
@@ -92,7 +92,7 @@ function createCollector(deps) {
     if (typeof d.t !== 'function') t = i18n.t;
     locale = i18n.locale;
   }
-  const link = createPetLink({ playAnimGuard: d.playAnimGuard });
+  const link = createPetLink();
   const badgeLink = createBadgeLink();
   // App 启动器（底栏一排图标）。工厂可注入：测试绝不 spawn 真的 mdfind/open。
   const launcher = typeof d.createAppLauncher === 'function'

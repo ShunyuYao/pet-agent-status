@@ -34,7 +34,7 @@
     "test:panel-scroll": "node tests/e2e/panel-scroll-e2e.js",
     "test:ui-parity": "node tests/e2e/ui-parity-e2e.js",
     "test:waiting-accuracy": "node tests/e2e/waiting-accuracy-e2e.js",
-    "test:ui-e2e": "npm run test:figma-layout && npm run test:ui-parity && npm run test:app-launcher-e2e && npm run test:launcher-completion && npm run test:dismiss && npm run test:dismiss-restart && npm run test:waiting-accuracy && npm run test:panel-scroll && npm run test:panel-open && npm run test:codex-state-e2e && npm run test:reliability-e2e",
+    "test:ui-e2e": "npm run test:figma-layout && npm run test:ui-parity && npm run test:app-launcher-e2e && npm run test:launcher-completion && npm run test:dismiss && npm run test:dismiss-restart && npm run test:waiting-accuracy && npm run test:panel-scroll && npm run test:panel-open && npm run test:codex-state-e2e && npm run test:reliability-e2e && npm run test:completion-pose-e2e",
     "test:app-launcher-e2e": "node tests/e2e/app-launcher-e2e.js",
     "test:ui": "npm run test:offline && npm run test:ui-e2e",
     "test": "npm run test:offline",
@@ -47,6 +47,7 @@
     "test:codex-subagent-e2e": "node tests/e2e/codex-subagent-e2e.js",
     "test:codex-state-e2e": "node tests/e2e/codex-state-e2e.js && npm run test:codex-subagent-e2e",
     "test:reliability": "node tests/reliability-test.js",
-    "test:reliability-e2e": "node tests/e2e/reliability-e2e.js"
+    "test:reliability-e2e": "node tests/e2e/reliability-e2e.js",
+    "test:completion-pose-e2e": "node tests/e2e/completion-pose-e2e.js"
   }
 }
