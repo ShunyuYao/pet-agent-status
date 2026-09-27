@@ -10,6 +10,8 @@ const os = require('os');
 const LIB = path.join(__dirname, '..', 'lib');
 const stateFiles = require(path.join(LIB, 'state-files.js'));
 const { aggregate, DISMISSIBLE } = require(path.join(LIB, 'aggregate.js'));
+const { createDiagnostics, errorCode } = require(path.join(LIB, 'diagnostics.js'));
+const VERSION = require('../manifest.json').version;
 const { createStatusHistory } = require(path.join(LIB, 'status-history.js'));
 const { createPetLink } = require(path.join(LIB, 'pet-link.js'));
 const { createBadgeLink } = require(path.join(LIB, 'badge.js'));
@@ -79,6 +81,11 @@ function createCollector(deps) {
   const d = deps || {};
   const readSnapshots = typeof d.readSnapshots === 'function' ? d.readSnapshots : stateFiles.readSnapshots;
   const now = typeof d.now === 'function' ? d.now : () => Date.now();
+  const diagnostics = createDiagnostics({ dir: d.dir, now, version: VERSION });
+  const diagnose = (event, data) => diagnostics.record(event, data, 60000);
+  const fault = (stage, error) => diagnose('collector.fault', { stage, reason: stage === 'settings-write' ? 'write-error' : 'read-error', code: errorCode(error) });
+  let lastHealthAt = -Infinity;
+  const observed = new Map();
   const alive = typeof d.isPidAlive === 'function' ? d.isPidAlive : isPidAlive;
   // 语言只认这一处。副行/时间文案由 tool 取词后随行下发，panel 的静态文案则按
   // 快照里带的 locale 取 —— 两边各猜各的会当场撞车：tool 看 LANG、panel 看
@@ -104,8 +111,8 @@ function createCollector(deps) {
   // 面板与 Hooks 通道完全不受影响（fixtures/codex-ipc-facts.md §7）。
   // 工厂可注入：测试绝不碰真 socket（默认路径是真实 ~/.codex/ipc/ipc.sock）。
   const ipcFactory = typeof d.createCodexIpc === 'function' ? d.createCodexIpc : createCodexIpc;
-  const threadState = d.threadState || createCodexThreadState({ codexHome: d.codexHome });
-  const ingest = createCodexAppIngest({ dir: d.dir, now, threadFor: id => threadState.read([id]).get(id) || null });
+  const threadState = d.threadState || createCodexThreadState({ codexHome: d.codexHome, onDiagnostic: diagnose });
+  const ingest = createCodexAppIngest({ dir: d.dir, now, onDiagnostic: diagnose, threadFor: id => threadState.read([id]).get(id) || null });
   // rollout 活动探测（PROTOCOL.md「rollout 活动信号」）：App 任务 running 的主信号。
   // 可注入：测试用假目录，绝不 stat 真实 ~/.codex/sessions。
   const rollout = d.rolloutActivity || createRolloutActivity({ codexHome: d.codexHome, now });
@@ -206,7 +213,7 @@ function createCollector(deps) {
         const v = await pet.storage.get(IPC_ENABLED_KEY);
         return v == null ? true : v !== false;
       }
-    } catch (_) { /* 读不到走下面的兜底 */ }
+    } catch (error) { fault('settings-read', error); }
     return ipcEnabled == null ? true : ipcEnabled;
   }
 
@@ -219,6 +226,8 @@ function createCollector(deps) {
     ipcEnabled = want;
     if (want && !codexIpc) {
       codexIpc = ipcFactory({
+        now,
+        onDiagnostic: (event, data) => diagnostics.record(event, data, event === 'ipc.event' || event === 'ipc.consumer-error' ? 60000 : 0),
         socketPath: d.codexIpcPath || defaultCodexIpcPath(),
         // 摄入回调落状态文件，下一轮 tick（≤2s）自然进快照/联动，不在回调里强推
         onActivity: (id) => ingest.onActivity(id),
@@ -246,6 +255,7 @@ function createCollector(deps) {
   async function handleSetSetting(pet, data) {
     if (!data || data.key !== IPC_ENABLED_KEY) return;
     const value = data.value !== false;
+    diagnostics.record('settings.changed', { enabled: value });
     const revision = ++settingsRevision;
     settingWrite = true;
     ipcEnabled = value;
@@ -253,7 +263,7 @@ function createCollector(deps) {
       if (pet && pet.storage && typeof pet.storage.set === 'function') {
         await pet.storage.set(IPC_ENABLED_KEY, value);
       }
-    } catch (_) { /* 存不下也先按用户意图切运行态，下轮读回真值自会纠偏 */ }
+    } catch (error) { fault('settings-write', error); }
     if (revision !== settingsRevision) return;
     settingWrite = false;
     ipcEnabled = value;
@@ -385,7 +395,7 @@ function createCollector(deps) {
       // Identity filtering also applies to historical records when enhancement is off.
       // Keep missing entries so tracked rollout paths survive optional DB failures.
       let metadata = new Map();
-      try { metadata = threadState.read([...ids]); } catch (_) { /* unavailable metadata fails open */ }
+      try { metadata = threadState.read([...ids]); } catch (error) { fault('metadata', error); }
       for (const id of ids) if (!metadata.has(id)) metadata.set(id, {});
       // rollout 活动摄入放在读快照**之前**：本轮写下的 running 本轮就进面板。
       // 与 IPC 增强共用同一开关（关掉增强 = 关掉全部 App 摄入，PROTOCOL.md）。
@@ -398,14 +408,15 @@ function createCollector(deps) {
           for (const id of rolloutActive.keys()) {
             ingest.onRolloutActivity(id, (tid) => !!(codexIpc && codexIpc.isFollowing(tid)), metadata.get(id) || null);
           }
-        } catch (_) { rolloutActive = new Map(); }   // 探测挂了不打死采集轮
+        } catch (error) { rolloutActive = new Map(); fault('rollout', error); }   // 探测挂了不打死采集轮
       } else if (rolloutActive.size) {
         rolloutActive = new Map();
       }
       // WorkBuddy 摄入同样放在读快照之前（本轮写下的行本轮进面板）。
       // 无独立开关（v1，PROTOCOL.md）：没装 WorkBuddy 时模块自己静默无行为。
-      try { workbuddy.tick(); } catch (_) { /* 摄入挂了不打死采集轮 */ }
+      try { workbuddy.tick(); } catch (error) { fault('workbuddy', error); }
       const raw = readSnapshots(d.dir);
+      if (raw.unavailable || raw.unknown?.length) diagnose('collector.state-files', { unavailable: !!raw.unavailable, badFiles: raw.unknown?.length || 0 });
       const badNames = new Set((raw.unknown || []).map(item => path.basename(item.file)));
       for (const record of raw.records) confirmedRecords.set(record.sessionId, record);
       const present = new Set(raw.records.map(record => record.sessionId));
@@ -452,6 +463,22 @@ function createCollector(deps) {
         }
       });
       // locale 随快照下发，panel 据此选词表（契约仍是 {rows, summary}，locale 是附加字段）
+      for (const row of result.rows) {
+        const signature = JSON.stringify([row.runId, row.state, row.read]);
+        if (observed.get(row.sessionId) !== signature) {
+          diagnostics.record('collector.state', { sessionId: row.sessionId, runId: row.runId, state: row.state, read: row.read });
+          observed.set(row.sessionId, signature);
+        }
+      }
+      const currentIds = new Set(result.rows.map(row => row.sessionId));
+      for (const id of observed.keys()) if (!currentIds.has(id)) observed.delete(id);
+      if (at - lastHealthAt >= 60000) {
+        lastHealthAt = at;
+        diagnostics.record('collector.health', { ...(codexIpc?.diagnostics?.() || { state: codexIpc?.state || 'off' }),
+          enabled: ipcEnabled !== false, trackedCount: ids.size, metadataCount: [...metadata.values()].filter(item => item.turn).length,
+          activeCount: rolloutActive.size, rows: result.rows.length, running: result.summary.running,
+          waiting: result.summary.waiting, unknown: result.summary.unknown, badFiles: raw.unknown?.length || 0 });
+      }
       statusHistory.observe(result.rows, visible.records);
       void statusHistory.flush(pet);
       result.locale = locale;
@@ -470,7 +497,8 @@ function createCollector(deps) {
       void badgeLink.onSummary(result.summary, pet);
       void syncCodexIpc(pet);   // 设置项运行时可改：开了要连上、关了要断开
       return result;
-    } catch (_) {
+    } catch (error) {
+      fault('tick', error);
       return lastSnapshot;   // 本轮读坏了就沿用上轮，面板不闪空
     }
   }
@@ -553,6 +581,7 @@ function createCollector(deps) {
 
   async function start(pet) {
     if (taskId != null) return taskId;   // 启停串行，不重复注册（重复注册 = 泄漏定时器）
+    diagnostics.record('collector.started');
     restoringDismissed = true;
     // 先接意图再起定时器：面板可能在 tick 之前就点了接入
     subscribe(pet, PANEL_READY_EVENT, () => replayPanel(pet));
@@ -579,12 +608,14 @@ function createCollector(deps) {
     try { if (pet?.storage?.get) link.restore(await pet.storage.get('notifiedRounds')); } catch (_) {}
     await syncCodexIpc(pet);
     restoringDismissed = false;
-    taskId = await pet.scheduler.every(TICK_MS, () => tick(pet));
+    try { taskId = await pet.scheduler.every(TICK_MS, () => tick(pet)); }
+    catch (error) { fault('scheduler', error); throw error; }
     tick(pet);   // 预备首轮；之后新开的面板经 panel-ready 立即取这份结果
     return taskId;
   }
 
   async function stop(pet) {
+    diagnostics.record('collector.stopped');
     await syncDismissed(pet);
     await notificationWrite;
     await statusHistory.flush(pet);

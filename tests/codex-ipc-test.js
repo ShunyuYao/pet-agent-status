@@ -3,7 +3,7 @@
 //
 // 需求条件 → 断言（先断言后实现）：
 //   ① 帧解析：半包/粘包/超长帧/坏 JSON 各一条
-//   ② 握手：成功置 ready；超时不死磕 → disabled（退回 Hooks）
+//   ② 握手：成功置 ready；超时按有上限的退避重试
 //   ③ 只认实录事件：following 生效；【调研】未复现的事件一律忽略，绝不映射成 done
 //   ④ 故障即退场：协议错停用不重连；socket 错误走退避重连
 //   ⑤ 深链接：只接受 UUID；非法/非 codex:// 拒绝；no-scheme 与 failed 分开
@@ -135,14 +135,23 @@ test('握手成功 → ready，且发出的是 initialize 帧', () => {
   assert.strictEqual(h.api.state, 'ready');
 });
 
-test('握手超时不死磕 → disabled（退回 Hooks）', () => {
+test('握手超时是暂时无响应：退避后重新握手并恢复 following', () => {
   const h = harness();
   h.api.start();
   h.sockets[0].emit('connect');
   const hs = h.timers.find((t) => t.ms === 5000);
   assert.ok(hs, '应设了握手超时');
   h.fire(hs);
-  assert.strictEqual(h.api.state, 'disabled');
+  assert.strictEqual(h.api.state, 'idle');
+  const retry = h.timers.find(t => t.ms === ipc.BACKOFF_MS[0] && !t.cancelled);
+  assert.ok(retry);
+  h.fire(retry);
+  const next = h.sockets[1];
+  next.emit('connect');
+  next.emit('data', frameOf({ type: 'response', method: 'initialize' }));
+  next.emit('data', frameOf({ type: 'broadcast', method: 'thread-stream-following-changed', params: { conversationId: 'c1', following: true } }));
+  assert.equal(h.api.state, 'ready');
+  assert.deepEqual(h.api.followingIds(), ['c1']);
 });
 
 test('协议错（坏帧）→ 停用且不重连', () => {

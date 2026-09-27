@@ -22,13 +22,13 @@
 | 能力 | 用途 | 范围 |
 |---|---|---|
 | `crypto.randomUUID` | 为没有上游回合编号的 hook 生成本地执行编号 | 不采集随机数以外的数据 |
-| `fs` 读写 `~/.local/state/pet-agent-status/` | 读取会话状态文件（本插件 hooks 自己写入的数据） | 仅该目录 |
+| `fs` 读写 `~/.local/state/pet-agent-status/` | 读取会话状态文件、写入有容量上限的本地诊断日志（本插件自己产生的数据） | 仅该目录 |
 | `fs` 读写 `~/.claude/settings.json`、`~/.codex/hooks.json` | 「一键接入/移除钩子」时合并写入 hooks 条目，写前自动备份 | 仅接入/卸载动作时；不碰 Codex 的 `hooks.state` 信任文件 |
 | `child_process` spawn `ps` | 按会话的 tty 反查它属于哪个终端 App（决定这一行能否跳转） | 只读进程表，10 秒缓存 |
 | `child_process` spawn `osascript` | ① 点击会话行时聚焦 iTerm2 / Terminal.app 对应窗口标签页；② 读取终端标签标题做会话名（Claude Code 把 AI 生成的标题推给了终端，磁盘上没有） | ① 仅跳转动作时；② 15s 缓存的只读查询，仅查已在运行的终端（不拉起 App），与跳转同一份自动化授权 |
 | `child_process` spawn `open` | ① 点击 Codex App / WorkBuddy 任务时经 `codex://threads/<id>` / `workbuddy://chat/<id>` 深链接跳转；② 点击 Claude Desktop App 会话时 `open -b` 把 Claude App 提到前台（App 无会话寻址深链接，只兜底激活不假装精确） | 仅跳转动作时 |
 | `fs` **只读** `~/Library/Application Support/Claude/claude-code-sessions/` | Claude Desktop App 会话的行标题（App 落盘的 AI 标题）与「这行是 App 会话」的归属判定 | 只读，30s 缓存；读不到自动降级（无标题、无跳转入口） |
-| `net` 连接 `~/.codex/ipc/ipc.sock` | Codex App 实时增强（**默认开，面板设置里可关**）：只读监听任务动态与跟随状态 | 开关打开时（默认）；故障自动停用 |
+| `net` 连接 `~/.codex/ipc/ipc.sock` | Codex App 实时增强（**默认开，面板设置里可关**）：只读监听任务动态与跟随状态 | 开关打开时（默认）；断线/握手超时退避重连；协议异常停用 |
 | `fs` **只读 stat** `~/.codex/sessions/` | Codex App 日志文件的活动心跳 | 仅文件名、大小和修改时间，不读取正文；每 2s 检查近期目录及已知任务路径 |
 | `node:sqlite` **只读** `~/.codex/thread_history_1.sqlite`、`~/.codex/state_5.sqlite` | 按已知 App 任务 ID 定位 rollout_path，核验最新回合编号/状态/起止时间（续聊以已校验文件名关联内部运行 ID）；读取线程 source/thread_source 和 spawn 父子 ID，过滤子 Agent | 不读正文、错误详情或消息表；不可用时保持完成屏障并降级；增强关闭后仍核验已有 App 状态的子 Agent 身份 |
 | `fs`/`node:sqlite` **只读** `~/.codex/sqlite/codex-dev.db`、`~/.codex/session_index.jsonl` | 会话行显示 Codex 自己生成的线程标题 | 只读，30s 缓存；读不到自动降级为目录名 |
@@ -42,7 +42,7 @@
 连接 Codex App 的本地 IPC（`~/.codex/ipc/ipc.sock`，仅当前用户可访问）**只读监听**，做两件事：
 ① 把 App 里的任务摄入为面板会话行（提交 → 运行中；回合完成 → 已完成；映射表冻结在
 `PROTOCOL.md`，只映射实录确认过语义的事件，绝不误报完成）；② 感知你正在 App 里跟随哪个
-任务，让宠物聚焦它。该接口未获官方稳定性承诺，任何异常都会自动停用并退回默认的钩子通道。
+任务，让宠物聚焦它。该接口未获官方稳定性承诺，连接失败、普通断线和 5 秒握手超时按 1/5/15/60 秒退避重连；确认连接成功后重置退避。坏 JSON 或超过 1 MiB 的数据帧仍停止监听，避免反复处理未知协议，需要关闭再开启增强。
 点击 Codex App 任务行时经系统 `open codex://threads/<id>` 跳转（只接受 UUID 形态的任务 id）。
 明确标记为子 Agent 的任务不单独显示、计数或提醒；父任务照常显示。身份元数据暂不可用时保守保留，恢复后自动过滤。
 实测事实见 `fixtures/codex-ipc-facts.md`。
@@ -81,3 +81,11 @@ App 已跟踪回合的完成由本地元数据核验，不依赖完成通知。�
 **当前 Codex App 的批准等待检测仍不可用**：已验证的被动 IPC 和本地回合库均不提供待批准请求。设置页明确披露；插件不启动另一个 App Server 冒充当前实例、不订阅会话正文，也不自动批准。长时间无输出且无实时运行确认时会显示同步暂停。
 
 升级写 schema:3，兼容读 schema:1/2。旧版本不能读取新状态；回退前应备份状态目录并同时回退 hooks 写入器，由真实事件重新采集，不能把新状态转为“已完成”。详细契约见 PROTOCOL.md。
+
+### 本地诊断日志
+
+默认写入 `~/.local/state/pet-agent-status/diagnostics/agent-status.jsonl`（`PET_AGENT_STATUS_DIR` 可覆盖父目录）。每行一条 JSON，含 UTC 时间、进程/实例 ID、插件版本和事件类型。保留当前文件及 `.1`、`.2` 两份旧日志，每份最多 1 MiB，总计最多 3 MiB；重启继续追加，文件仅当前用户可读写。不上传，可直接把这三个文件提供给排查者。
+
+记录启动、停止、Codex 连接/握手成功、重试原因/次数/下一次重试时间、协议停用原因、已识别事件的任务 ID、元数据查询/写入失败、状态变化，以及每分钟健康摘要（连接态、收包数、最后收包时间、任务数量）。相同故障一分钟内去重；不保存原始 IPC 帧、对话正文、标题、路径、错误消息或堆栈。缺少正文的错误以固定原因码和系统错误码定位。日志写失败不影响插件，每 30 秒允许重新尝试。
+
+现有宿主 storage 的 `statusTransitions` 仍保留最近 100 条状态迁移；新增文件日志用于定位连接与采集链路。若进程被宿主强制终止，可能没有停止记录，应结合下一次启动和宿主日志判断。协议异常后开关可能仍为开启：查看日志中的 `ipc.disabled`，关闭再开启会生成新的连接记录；普通断线和握手超时查看 `ipc.retry` → `ipc.ready`。
