@@ -1,6 +1,7 @@
 {
   "id": "pet-agent-status",
   "name": "Agent 会话状态",
+  "description": "查看 AI 编程助手的任务进度，在任务完成或等待批准时提醒你。",
   "version": "0.13.2",
   "apiVersion": 1,
   "activation": "opt-in",
